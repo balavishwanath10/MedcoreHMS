@@ -1,9 +1,9 @@
-# MedCoreHMS — Day 2 Completion Report: Full Architecture and Database Design
+# MedCoreHMS â€” Day 2 Completion Report: Full Architecture and Database Design
 
 **Date:** 2026-11-15
 **Project:** MedCoreHMS
 **Repository Target:** `https://github.com/balavishwanath10/MedCoreHMS`
-**Phase:** Day 2 — Architecture and Database Design
+**Phase:** Day 2 â€” Architecture and Database Design
 **Overall Status:** COMPLETED & VERIFIED
 
 ---

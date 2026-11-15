@@ -1,4 +1,4 @@
-# MedCoreHMS — Phase 0 to Day 3 Final Acceptance and Verification Report
+# MedCoreHMS â€” Phase 0 to Day 3 Final Acceptance and Verification Report
 
 **Project:** MedCoreHMS
 **Repository:** `https://github.com/balavishwanath10/MedCoreHMS`
@@ -120,7 +120,7 @@ MedCoreHMS/
 
 ## 5. Day-by-Day Implementation & Verification Summary
 
-### 5.1 Day 1 — Unified Project Initialization
+### 5.1 Day 1 â€” Unified Project Initialization
 
 - **Delivered:** Single root package, React 19 frontend shell, Express backend with Helmet/CORS, Zod environment validation, structured logger with automatic redaction, centralized error handler, `GET /api/health`, and unified build pipeline.
 - **Verification Evidence:**
@@ -129,7 +129,7 @@ MedCoreHMS/
   - `GET /api/health`: Truthfully reports `{ status: "degraded", database: { status: "disconnected", readyState: 0 } }`.
   - Non-API routes serve React SPA; unknown `/api/*` routes return 404 JSON.
 
-### 5.2 Day 2 — Architecture & MongoDB Database Design
+### 5.2 Day 2 â€” Architecture & MongoDB Database Design
 
 - **Delivered:** Complete domain modeling for all 19+ PRD collections, tenant-scoped compound index plan, concurrency mitigations (doctor double-booking prevention via unique partial indexes, FIFO pharmacy inventory depletion), 9-role permission matrix, and application-level encryption for PHI.
 - **Verification Evidence:**
@@ -137,7 +137,7 @@ MedCoreHMS/
   - Formal documentation across 7 comprehensive architectural guides.
   - Open questions on receptionist payment handling and inpatient nurse workflows flagged explicitly.
 
-### 5.3 Day 3 — Foundational Mongoose Models & Database Setup
+### 5.3 Day 3 â€” Foundational Mongoose Models & Database Setup
 
 - **Delivered:** Centralized Mongoose connection lifecycle with graceful shutdown, 5 core models (`Hospital`, `User`, `Department`, `DoctorProfile`, `PatientProfile`), Zod validation schemas, safe development seed script (`scripts/seed.ts`), and verification script (`scripts/verify-db.ts`).
 - **Verification Evidence:**
@@ -152,9 +152,9 @@ MedCoreHMS/
 ```
  RUN  v3.2.7 C:/Users/91949/Desktop/MedcoreHMS
 
- ✓ tests/unit/health.test.ts (2 tests) 5ms
- ✓ tests/unit/models.test.ts (18 tests) 23ms
- ✓ tests/integration/health.test.ts (2 tests) 9ms
+ âœ“ tests/unit/health.test.ts (2 tests) 5ms
+ âœ“ tests/unit/models.test.ts (18 tests) 23ms
+ âœ“ tests/integration/health.test.ts (2 tests) 9ms
 
  Test Files  3 passed (3)
       Tests  22 passed (22)
@@ -242,7 +242,7 @@ MedCoreHMS/
 
 1. **Host Git CLI Missing:** Git is not installed on the host Windows PATH (`where.exe git` returned not found). Local commits and pushes to GitHub require the user to install Git for Windows.
 2. **Live MongoDB Daemon Offline:** `MONGODB_URI` defaults to `mongodb://localhost:27017/medcorehms`. No local daemon or Atlas cluster is currently active. Connecting to a live database requires either starting local MongoDB or provisioning a MongoDB Atlas cluster and updating `.env`.
-3. **Strict Stop Condition:** Authentication, JWT issuance, OTP validation, and RBAC middleware have intentionally not been implemented per the Day 1–3 scope boundaries.
+3. **Strict Stop Condition:** Authentication, JWT issuance, OTP validation, and RBAC middleware have intentionally not been implemented per the Day 1â€“3 scope boundaries.
 
 ---
 

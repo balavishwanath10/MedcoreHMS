@@ -25,6 +25,23 @@ export const hospitalCreateSchema = z.object({
   status: z.enum(['ACTIVE', 'SUSPENDED', 'ONBOARDING', 'INACTIVE']).default('ONBOARDING'),
 });
 
+export const registerSchema = z.object({
+  email: z.string().trim().toLowerCase().email('Invalid email address format'),
+  password: z
+    .string()
+    .min(8, 'Password must be at least 8 characters')
+    .max(100, 'Password cannot exceed 100 characters'),
+  firstName: z.string().trim().min(1, 'First name is required').max(50),
+  lastName: z.string().trim().min(1, 'Last name is required').max(50),
+  phone: z.string().trim().min(7, 'Phone number must be at least 7 characters').optional(),
+  hospitalId: z.string().optional().nullable(),
+});
+
+export const loginSchema = z.object({
+  email: z.string().trim().toLowerCase().email('Invalid email address format'),
+  password: z.string().min(1, 'Password is required'),
+});
+
 export const userCreateSchema = z.object({
   hospitalId: z.string().optional().nullable(),
   email: z.string().trim().toLowerCase().email('Invalid email address'),
