@@ -1,0 +1,33 @@
+sequenceDiagram
+    autonumber
+    actor Client as Authenticated Client (Doctor / Admin)
+    participant Gateway as Express API Gateway
+    participant Auth as Auth & Tenant Context Middleware
+    participant Controller as Domain Controller (e.g., EMR)
+    participant Mongoose as Mongoose Multi-Tenant Query
+    participant Atlas as MongoDB Atlas Cluster
+
+    Client->>Gateway: GET /api/v1/patients/12345 (Bearer JWT in Header)
+    Note over Client,Gateway: Client CANNOT override tenant via query params or body
+
+    Gateway->>Auth: Verify JWT & Extract Claims
+    Auth->>Auth: Validate Signature, Expiry & Revocation
+    Note over Auth: Extract: user_id: "U1", role: "DOCTOR", hospitalId: "HOSP_A"
+    Auth-->>Gateway: Attach req.user = { userId, role, hospitalId }
+
+    Gateway->>Controller: Forward Request with Verified Tenant Context
+    Controller->>Mongoose: findOne({ _id: "12345", hospitalId: req.user.hospitalId, isDeleted: false })
+    Note over Mongoose: Query filter explicitly injected: { hospitalId: "HOSP_A" }
+
+    alt Patient belongs to HOSP_A
+        Mongoose->>Atlas: db.patients.findOne({ _id: ObjectId("12345"), hospitalId: ObjectId("HOSP_A") })
+        Atlas-->>Mongoose: Patient Document
+        Mongoose-->>Controller: Hydrated Patient
+        Controller-->>Client: 200 OK (Patient Data)
+    else Patient belongs to HOSP_B (Cross-Tenant Attack Attempt)
+        Mongoose->>Atlas: db.patients.findOne({ _id: ObjectId("12345"), hospitalId: ObjectId("HOSP_A") })
+        Atlas-->>Mongoose: null (No match because hospitalId differs)
+        Mongoose-->>Controller: null
+        Controller-->>Client: 404 Not Found (or 403 Forbidden)
+        Note over Controller,Client: Zero information leakage across hospital boundaries
+    end

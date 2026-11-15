@@ -1,0 +1,171 @@
+erDiagram
+    HOSPITAL ||--o{ USER : "employs / owns"
+    HOSPITAL ||--o{ DEPARTMENT : "contains"
+    HOSPITAL ||--o{ ROOM : "maintains"
+    HOSPITAL ||--o{ PATIENT_PROFILE : "registers"
+    HOSPITAL ||--o{ APPOINTMENT : "schedules"
+    HOSPITAL ||--o{ ENCOUNTER : "hosts"
+    HOSPITAL ||--o{ INVOICE : "bills"
+    HOSPITAL ||--o{ INVENTORY_ITEM : "stocks"
+    HOSPITAL ||--o{ LAB_ORDER : "orders"
+    HOSPITAL ||--o{ AUDIT_LOG : "records"
+
+    DEPARTMENT ||--o{ DOCTOR_PROFILE : "assigns"
+    USER ||--|| DOCTOR_PROFILE : "extends (role: DOCTOR)"
+    USER ||--o| PATIENT_PROFILE : "portal account (role: PATIENT)"
+    USER ||--o{ REFRESH_TOKEN : "issues"
+
+    DOCTOR_PROFILE ||--o{ DOCTOR_AVAILABILITY : "defines"
+    DOCTOR_PROFILE ||--o{ APPOINTMENT : "attends"
+    PATIENT_PROFILE ||--o{ APPOINTMENT : "books"
+
+    APPOINTMENT ||--o| ENCOUNTER : "initiates"
+    PATIENT_PROFILE ||--o{ ENCOUNTER : "undergoes"
+    DOCTOR_PROFILE ||--o{ ENCOUNTER : "conducts"
+
+    ENCOUNTER ||--o{ MEDICAL_RECORD : "contains (immutable)"
+    ENCOUNTER ||--o{ PRESCRIPTION : "generates"
+    ENCOUNTER ||--o{ LAB_ORDER : "requests"
+
+    PRESCRIPTION ||--o{ INVENTORY_ITEM : "dispenses"
+    INVENTORY_ITEM ||--o{ INVENTORY_BATCH : "tracks (FIFO)"
+
+    LAB_ORDER ||--o{ LAB_RESULT : "produces"
+
+    ENCOUNTER ||--o| INVOICE : "generates bill"
+    INVOICE ||--o{ INVOICE_ITEM : "itemizes"
+    INVOICE ||--o{ PAYMENT : "receives"
+    INVOICE ||--o| INSURANCE_CLAIM : "claims"
+
+    USER ||--o{ NOTIFICATION : "receives"
+
+    HOSPITAL {
+        ObjectId _id PK
+        string name
+        string code UK
+        string slug UK
+        string status
+        object settings
+    }
+
+    USER {
+        ObjectId _id PK
+        ObjectId hospitalId FK "null for SUPER_ADMIN"
+        string email UK
+        string passwordHash
+        string role
+        string status
+    }
+
+    DEPARTMENT {
+        ObjectId _id PK
+        ObjectId hospitalId FK
+        string name
+        string code "unique per hospital"
+        ObjectId headDoctorId FK
+    }
+
+    DOCTOR_PROFILE {
+        ObjectId _id PK
+        ObjectId hospitalId FK
+        ObjectId userId FK UK
+        ObjectId departmentId FK
+        string licenseNumber UK
+        string specialization
+        number consultationFee
+    }
+
+    PATIENT_PROFILE {
+        ObjectId _id PK
+        ObjectId hospitalId FK
+        ObjectId userId FK "optional"
+        string mrn "unique per hospital"
+        string firstName
+        string lastName
+        date dateOfBirth
+        string gender
+        string bloodGroup
+        boolean isDeleted
+    }
+
+    APPOINTMENT {
+        ObjectId _id PK
+        ObjectId hospitalId FK
+        ObjectId patientId FK
+        ObjectId doctorId FK
+        date startTime
+        date endTime
+        string status
+        string type
+    }
+
+    ENCOUNTER {
+        ObjectId _id PK
+        ObjectId hospitalId FK
+        ObjectId appointmentId FK
+        ObjectId patientId FK
+        ObjectId doctorId FK
+        string chiefComplaint
+        object vitals
+        date encounterDate
+    }
+
+    MEDICAL_RECORD {
+        ObjectId _id PK
+        ObjectId hospitalId FK
+        ObjectId encounterId FK
+        ObjectId patientId FK
+        string diagnosis
+        string clinicalNotes "encrypted PHI"
+        boolean isImmutable
+    }
+
+    PRESCRIPTION {
+        ObjectId _id PK
+        ObjectId hospitalId FK
+        ObjectId encounterId FK
+        ObjectId patientId FK
+        ObjectId doctorId FK
+        array items
+        string status
+    }
+
+    INVENTORY_ITEM {
+        ObjectId _id PK
+        ObjectId hospitalId FK
+        string name
+        string code "unique per hospital"
+        number totalStock
+    }
+
+    INVENTORY_BATCH {
+        ObjectId _id PK
+        ObjectId hospitalId FK
+        ObjectId inventoryItemId FK
+        string batchNumber
+        date expiryDate
+        number initialQuantity
+        number remainingQuantity
+    }
+
+    INVOICE {
+        ObjectId _id PK
+        ObjectId hospitalId FK
+        ObjectId patientId FK
+        ObjectId encounterId FK
+        string invoiceNumber "unique per hospital"
+        number totalAmount
+        number paidAmount
+        string status
+    }
+
+    AUDIT_LOG {
+        ObjectId _id PK
+        ObjectId hospitalId FK
+        ObjectId userId FK
+        string action
+        string entityType
+        ObjectId entityId
+        object metadata
+        date timestamp
+    }

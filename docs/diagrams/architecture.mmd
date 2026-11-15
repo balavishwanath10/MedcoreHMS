@@ -1,0 +1,40 @@
+graph TB
+    subgraph ClientLayer ["Client Layer (Browser)"]
+        Browser["Web Browser (Desktop / Tablet / Mobile)"]
+        ReactApp["React 19 SPA (Vite + Tailwind CSS + TanStack Query + Zustand)"]
+        Browser --> ReactApp
+    end
+
+    subgraph RenderPlatform ["Render Platform (Single Unified Web Service)"]
+        subgraph ExpressServer ["Express.js Runtime (process.env.PORT)"]
+            StaticServer["Static Asset Server (/dist/client) + SPA Fallback"]
+            SecurityMiddleware["Security Stack (Helmet, Strict CORS, Sanitized Logger)"]
+            APIRouter["API Router (/api/*)"]
+            AuthModule["JWT Auth & Tenant Context (Planned Day 4)"]
+            BusinessControllers["Domain Controllers (Hospital, EMR, Billing, Pharmacy)"]
+            MongooseLayer["Mongoose 8 ODM & Schema Validation"]
+
+            StaticServer --- ReactApp
+            SecurityMiddleware --> APIRouter
+            APIRouter --> AuthModule
+            AuthModule --> BusinessControllers
+            BusinessControllers --> MongooseLayer
+        end
+    end
+
+    subgraph DataLayer ["Data & Persistence Layer"]
+        MongoDB[("MongoDB Atlas (Managed Replica Set)\n[IMPLEMENTED FOUNDATION]")]
+        MongooseLayer -->|TLS Connection & Transactions| MongoDB
+    end
+
+    subgraph PlannedExternalServices ["Planned External Integrations (Days 4+)"]
+        Redis[("Managed Redis 7\n(BullMQ & Session Cache)\n[PLANNED]")]
+        CloudStorage[("Cloudinary / S3\n(Medical Documents & Scans)\n[PLANNED]")]
+        SocketIO["Socket.IO Server\n(Real-time Notifications)\n[PLANNED]"]
+        EmailSMS["Email & SMS Gateways\n(Nodemailer & Twilio)\n[PLANNED]"]
+    end
+
+    BusinessControllers -.->|Background Jobs| Redis
+    BusinessControllers -.->|File Uploads| CloudStorage
+    BusinessControllers -.->|Live Events| SocketIO
+    BusinessControllers -.->|Alerts & OTP| EmailSMS
