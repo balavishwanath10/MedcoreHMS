@@ -40,7 +40,9 @@ describe('Health and System Diagnostics Unit Tests', () => {
     expect(statusCode).toBe(404);
     expect(jsonPayload.success).toBe(false);
     expect((jsonPayload.error as Record<string, unknown>).code).toBe('ROUTE_NOT_FOUND');
-    expect((jsonPayload.error as Record<string, unknown>).message).toContain('Cannot GET /api/unknown-endpoint');
+    expect((jsonPayload.error as Record<string, unknown>).message).toContain(
+      'Cannot GET /api/unknown-endpoint',
+    );
     expect(jsonPayload.timestamp).toBeDefined();
   });
 });

@@ -45,6 +45,15 @@ export interface IUser {
   phone?: string;
   status: UserStatus;
   isEmailVerified: boolean;
+  isPhoneVerified?: boolean;
+  passwordResetTokenHash?: string | null;
+  passwordResetExpires?: Date | null;
+  emailOtpHash?: string | null;
+  emailOtpExpires?: Date | null;
+  emailOtpAttempts?: number;
+  phoneOtpHash?: string | null;
+  phoneOtpExpires?: Date | null;
+  phoneOtpAttempts?: number;
   lastLoginAt?: Date | null;
   isDeleted: boolean;
   createdAt?: string | Date;

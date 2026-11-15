@@ -42,6 +42,42 @@ export const loginSchema = z.object({
   password: z.string().min(1, 'Password is required'),
 });
 
+export const forgotPasswordSchema = z.object({
+  email: z.string().trim().toLowerCase().email('Invalid email address format'),
+});
+
+export const resetPasswordSchema = z.object({
+  token: z.string().trim().min(32, 'Password reset token is invalid or malformed'),
+  newPassword: z
+    .string()
+    .min(8, 'Password must be at least 8 characters')
+    .max(100, 'Password cannot exceed 100 characters'),
+});
+
+export const sendEmailOtpSchema = z.object({
+  email: z.string().trim().toLowerCase().email('Invalid email address format'),
+});
+
+export const verifyEmailOtpSchema = z.object({
+  email: z.string().trim().toLowerCase().email('Invalid email address format'),
+  otp: z
+    .string()
+    .trim()
+    .regex(/^\d{6}$/, 'OTP must be exactly 6 numeric digits'),
+});
+
+export const sendPhoneOtpSchema = z.object({
+  phone: z.string().trim().min(7, 'Phone number must be at least 7 digits'),
+});
+
+export const verifyPhoneOtpSchema = z.object({
+  phone: z.string().trim().min(7, 'Phone number must be at least 7 digits'),
+  otp: z
+    .string()
+    .trim()
+    .regex(/^\d{6}$/, 'OTP must be exactly 6 numeric digits'),
+});
+
 export const userCreateSchema = z.object({
   hospitalId: z.string().optional().nullable(),
   email: z.string().trim().toLowerCase().email('Invalid email address'),

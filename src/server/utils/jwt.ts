@@ -1,4 +1,5 @@
 import jwt, { SignOptions } from 'jsonwebtoken';
+import crypto from 'crypto';
 import { env } from '../config/env.js';
 import { UserRole } from '../../shared/types/index.js';
 
@@ -19,6 +20,7 @@ const REFRESH_TOKEN_EXPIRY = '7d';
 export function generateAccessToken(payload: TokenPayload): string {
   const options: SignOptions = {
     expiresIn: ACCESS_TOKEN_EXPIRY,
+    jwtid: crypto.randomUUID(),
   };
   return jwt.sign(payload, env.JWT_ACCESS_SECRET, options);
 }
@@ -30,6 +32,7 @@ export function generateRefreshToken(payload: TokenPayload, familyId?: string): 
   };
   const options: SignOptions = {
     expiresIn: REFRESH_TOKEN_EXPIRY,
+    jwtid: crypto.randomUUID(),
   };
   return jwt.sign(tokenPayload, env.JWT_REFRESH_SECRET, options);
 }

@@ -3,6 +3,7 @@ import mongoose from 'mongoose';
 import { app } from '../../src/server/app.js';
 import { makeRequest } from '../utils/inMemoryTestClient.js';
 import { User } from '../../src/server/models/User.js';
+import { RefreshToken } from '../../src/server/models/RefreshToken.js';
 import { hashPassword } from '../../src/server/utils/password.js';
 import { generateAccessToken } from '../../src/server/utils/jwt.js';
 
@@ -17,19 +18,22 @@ describe('Authentication API Endpoints Integration Tests', () => {
   describe('POST /api/auth/register', () => {
     it('should successfully register a new patient user', async () => {
       vi.spyOn(User, 'findOne').mockResolvedValue(null);
-      vi.spyOn(User, 'create').mockImplementation(async (userData: any) => ({
-        _id: dummyUserId,
-        email: userData.email,
-        role: userData.role,
-        firstName: userData.firstName,
-        lastName: userData.lastName,
-        phone: userData.phone,
-        hospitalId: userData.hospitalId,
-        status: userData.status,
-        isEmailVerified: false,
-        createdAt: new Date(),
-        toJSON: () => ({ email: userData.email, role: userData.role }),
-      }) as any);
+      vi.spyOn(User, 'create').mockImplementation(
+        async (userData: any) =>
+          ({
+            _id: dummyUserId,
+            email: userData.email,
+            role: userData.role,
+            firstName: userData.firstName,
+            lastName: userData.lastName,
+            phone: userData.phone,
+            hospitalId: userData.hospitalId,
+            status: userData.status,
+            isEmailVerified: false,
+            createdAt: new Date(),
+            toJSON: () => ({ email: userData.email, role: userData.role }),
+          }) as any,
+      );
 
       const res = await makeRequest(app, {
         method: 'POST',
@@ -143,6 +147,7 @@ describe('Authentication API Endpoints Integration Tests', () => {
       vi.spyOn(User, 'findOne').mockReturnValue({
         select: vi.fn().mockResolvedValue(mockUser),
       } as any);
+      vi.spyOn(RefreshToken, 'create').mockResolvedValue({} as any);
 
       const res = await makeRequest(app, {
         method: 'POST',
@@ -179,6 +184,7 @@ describe('Authentication API Endpoints Integration Tests', () => {
       vi.spyOn(User, 'findOne').mockReturnValue({
         select: vi.fn().mockResolvedValue(mockUser),
       } as any);
+      vi.spyOn(RefreshToken, 'create').mockResolvedValue({} as any);
 
       const res = await makeRequest(app, {
         method: 'POST',
@@ -228,6 +234,7 @@ describe('Authentication API Endpoints Integration Tests', () => {
       vi.spyOn(User, 'findOne').mockReturnValue({
         select: vi.fn().mockResolvedValue(mockUser),
       } as any);
+      vi.spyOn(RefreshToken, 'create').mockResolvedValue({} as any);
 
       const res = await makeRequest(app, {
         method: 'POST',

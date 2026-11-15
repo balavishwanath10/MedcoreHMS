@@ -70,6 +70,50 @@ const userSchema = new Schema<UserDocument>(
       type: Boolean,
       default: false,
     },
+    isPhoneVerified: {
+      type: Boolean,
+      default: false,
+    },
+    passwordResetTokenHash: {
+      type: String,
+      select: false,
+      default: null,
+    },
+    passwordResetExpires: {
+      type: Date,
+      select: false,
+      default: null,
+    },
+    emailOtpHash: {
+      type: String,
+      select: false,
+      default: null,
+    },
+    emailOtpExpires: {
+      type: Date,
+      select: false,
+      default: null,
+    },
+    emailOtpAttempts: {
+      type: Number,
+      select: false,
+      default: 0,
+    },
+    phoneOtpHash: {
+      type: String,
+      select: false,
+      default: null,
+    },
+    phoneOtpExpires: {
+      type: Date,
+      select: false,
+      default: null,
+    },
+    phoneOtpAttempts: {
+      type: Number,
+      select: false,
+      default: 0,
+    },
     lastLoginAt: {
       type: Date,
       default: null,
@@ -85,6 +129,9 @@ const userSchema = new Schema<UserDocument>(
       virtuals: true,
       transform: (_doc, ret: Record<string, unknown>) => {
         delete ret.passwordHash; // Critical security safeguard
+        delete ret.passwordResetTokenHash;
+        delete ret.emailOtpHash;
+        delete ret.phoneOtpHash;
         delete ret.__v;
         return ret;
       },
@@ -93,6 +140,9 @@ const userSchema = new Schema<UserDocument>(
       virtuals: true,
       transform: (_doc, ret: Record<string, unknown>) => {
         delete ret.passwordHash; // Critical security safeguard
+        delete ret.passwordResetTokenHash;
+        delete ret.emailOtpHash;
+        delete ret.phoneOtpHash;
         delete ret.__v;
         return ret;
       },
