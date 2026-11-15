@@ -139,3 +139,19 @@ To guarantee tenant isolation throughout development, the following automated te
 4. **Global Email Uniqueness Across Tenants:**
    - Attempt to register a user with an email already taken in another hospital.
    - _Expected Outcome:_ 409 Conflict. User emails are globally unique across the entire platform.
+
+---
+
+## 6. Implementation Reference (Day 6 Verified)
+
+The multi-tenant data isolation and anti-tampering architecture is implemented and verified by:
+1. **Tenant Middleware:** `src/server/middleware/tenant.middleware.ts` (`requireTenant`):
+   - Validates that non-SuperAdmin users have `req.user.hospitalId`.
+   - Blocks explicit cross-tenant targeting in params, query, body, or headers with 403 `CROSS_TENANT_ACCESS_DENIED`.
+   - Forces downstream `req.hospitalId` and `req.body.hospitalId` to the authenticated user's tenant ID.
+   - Enables `SUPER_ADMIN` platform-wide tenant inspection while maintaining strict isolation for all other 8 roles.
+2. **Query Scoping Utilities:** `src/server/utils/tenantScope.ts`:
+   - `withTenant`: Programmatically injects `{ hospitalId: req.user.hospitalId }` into Mongoose queries.
+   - `assertTenantAccess`: Throws 403 `CROSS_TENANT_ACCESS_DENIED` on any cross-hospital resource access attempt.
+   - `enforceTenantBody`: Overwrites client payloads to guarantee write mutations cannot escape tenant boundaries.
+3. **Automated Verification:** Verified by integration test suite `tests/integration/rbac-tenant.test.ts` proving cross-tenant read/write blocks, tenant injection resistance, and query scoping.

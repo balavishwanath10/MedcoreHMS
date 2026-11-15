@@ -76,3 +76,13 @@
 > **OPEN QUESTION 2 (Nurse Prescription Visibility):**
 > Should a `NURSE` be allowed to mark medication as administered during inpatient stays?
 > _Proposed Baseline:_ Preserved for Day 7 (EMR module implementation) upon confirming inpatient workflow specs.
+
+---
+
+## 5. Implementation Reference (Day 6 Verified)
+
+The 9-role authorization system is implemented and enforced by:
+1. **Core Constants:** `src/shared/constants/roles.ts` defines `ROLES` and `ALL_ROLES`.
+2. **Role Authorization Middleware:** `src/server/middleware/rbac.middleware.ts` exports `requireRole(...roles)` providing compile-time typed role validation and runtime HTTP 403 Forbidden enforcement.
+3. **Granular Permissions Middleware:** `src/server/middleware/rbac.middleware.ts` exports `requirePermission(permission)` enforcing least-privilege action boundaries.
+4. **Automated Verification:** Verified by integration test suite `tests/integration/rbac-tenant.test.ts` covering all 9 roles, multi-role routes, missing token rejection, and granular permissions.
