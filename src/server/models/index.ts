@@ -16,3 +16,4 @@ export * from './Prescription.js';
 export * from './AuditLog.js';
 export * from './LabTest.js';
 export * from './LabOrder.js';
+export * from './LabResult.js';

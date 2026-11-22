@@ -575,3 +575,65 @@ export async function markLabSampleCollected(id: string, notes?: string): Promis
   }
   return result.data;
 }
+
+// Day 16 Structured Results & Clinical Review APIs
+export async function submitLabResult(orderId: string, data: any): Promise<any> {
+  const response = await fetch(`/api/lab/orders/${orderId}/results`, {
+    method: 'POST',
+    headers: { ...getAuthHeader(), 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  });
+  const result: ApiResponse<any> = await response.json();
+  if (!result.success || !result.data) {
+    throw new Error(result.error?.message || 'Failed to submit lab results');
+  }
+  return result.data;
+}
+
+export async function reviewLabResult(
+  id: string,
+  data: { action: 'APPROVE' | 'REJECT'; notes?: string; reason?: string },
+): Promise<any> {
+  const response = await fetch(`/api/lab/results/${id}/review`, {
+    method: 'POST',
+    headers: { ...getAuthHeader(), 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  });
+  const result: ApiResponse<any> = await response.json();
+  if (!result.success || !result.data) {
+    throw new Error(result.error?.message || 'Failed to process lab result review');
+  }
+  return result.data;
+}
+
+export async function fetchLabResults(params?: {
+  orderId?: string;
+  testId?: string;
+  status?: string;
+}): Promise<any[]> {
+  const urlParams = new URLSearchParams();
+  if (params?.orderId) urlParams.append('orderId', params.orderId);
+  if (params?.testId) urlParams.append('testId', params.testId);
+  if (params?.status) urlParams.append('status', params.status);
+
+  const q = urlParams.toString() ? `?${urlParams.toString()}` : '';
+  const response = await fetch(`/api/lab/results${q}`, {
+    headers: { ...getAuthHeader(), 'Content-Type': 'application/json' },
+  });
+  const result: ApiResponse<any[]> = await response.json();
+  if (!result.success || !result.data) {
+    throw new Error(result.error?.message || 'Failed to fetch lab results');
+  }
+  return result.data;
+}
+
+export async function fetchLabResultById(id: string): Promise<any> {
+  const response = await fetch(`/api/lab/results/${id}`, {
+    headers: { ...getAuthHeader(), 'Content-Type': 'application/json' },
+  });
+  const result: ApiResponse<any> = await response.json();
+  if (!result.success || !result.data) {
+    throw new Error(result.error?.message || 'Failed to fetch lab result details');
+  }
+  return result.data;
+}

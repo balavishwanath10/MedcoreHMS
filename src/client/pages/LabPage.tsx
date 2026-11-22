@@ -11,19 +11,26 @@ import {
   Activity,
   Layers,
   FileText,
+  Check,
+  XCircle,
+  AlertOctagon,
 } from 'lucide-react';
 import {
   fetchLabTests,
   fetchLabOrders,
   createLabOrder,
   markLabSampleCollected,
+  submitLabResult,
+  reviewLabResult,
+  fetchLabResults,
   fetchDoctors,
   fetchEncounters,
 } from '../services/api';
 
 export const LabPage: React.FC = () => {
-  const [activeTab, setActiveTab] = useState<'queue' | 'order' | 'catalogue'>('queue');
+  const [activeTab, setActiveTab] = useState<'queue' | 'order' | 'results' | 'catalogue'>('queue');
   const [orders, setOrders] = useState<any[]>([]);
+  const [results, setResults] = useState<any[]>([]);
   const [catalogue, setCatalogue] = useState<any[]>([]);
   const [doctors, setDoctors] = useState<any[]>([]);
   const [encounters, setEncounters] = useState<any[]>([]);
@@ -46,6 +53,18 @@ export const LabPage: React.FC = () => {
   const [selectedTestIds, setSelectedTestIds] = useState<string[]>([]);
   const [submitting, setSubmitting] = useState<boolean>(false);
 
+  // Modal: Enter Results
+  const [enteringResultOrder, setEnteringResultOrder] = useState<any | null>(null);
+  const [selectedTestForResult, setSelectedTestForResult] = useState<any | null>(null);
+  const [parameterInputs, setParameterInputs] = useState<any[]>([]);
+  const [technicianNotes, setTechnicianNotes] = useState<string>('');
+
+  // Modal: Review Result
+  const [reviewingResult, setReviewingResult] = useState<any | null>(null);
+  const [reviewAction, setReviewAction] = useState<'APPROVE' | 'REJECT'>('APPROVE');
+  const [reviewReason, setReviewReason] = useState<string>('');
+  const [reviewNotes, setReviewNotes] = useState<string>('');
+
   useEffect(() => {
     loadInitialData();
   }, [statusFilter]);
@@ -54,15 +73,17 @@ export const LabPage: React.FC = () => {
     setLoading(true);
     setError(null);
     try {
-      const [orderData, testData, docData, encData] = await Promise.all([
+      const [orderData, testData, resultData, docData, encData] = await Promise.all([
         fetchLabOrders(statusFilter !== 'ALL' ? { status: statusFilter } : undefined),
         fetchLabTests(),
+        fetchLabResults().catch(() => []),
         fetchDoctors().catch(() => []),
         fetchEncounters().catch(() => []),
       ]);
 
       setOrders(orderData || []);
       setCatalogue(testData || []);
+      setResults(resultData || []);
       setDoctors(docData || []);
       setEncounters(encData || []);
 
@@ -129,6 +150,101 @@ export const LabPage: React.FC = () => {
       setError(err.message || 'Failed to update sample status');
     } finally {
       setLoading(false);
+    }
+  };
+
+  const openEnterResultModal = (order: any, testItem: any) => {
+    setEnteringResultOrder(order);
+    setSelectedTestForResult(testItem);
+
+    // Look up test definition from catalogue to pre-populate parameters
+    const catTest = catalogue.find(
+      (t) => t._id === testItem.testId || t.code === testItem.testCode,
+    );
+    if (catTest && catTest.referenceRanges && catTest.referenceRanges.length > 0) {
+      setParameterInputs(
+        catTest.referenceRanges.map((r: any) => ({
+          parameterName: r.parameterName,
+          value: '',
+          unit: r.unit || '',
+          referenceRangeMin: r.minNormal,
+          referenceRangeMax: r.maxNormal,
+          textRange: r.textRange,
+        })),
+      );
+    } else {
+      setParameterInputs([
+        {
+          parameterName: testItem.testName,
+          value: '',
+          unit: '',
+        },
+      ]);
+    }
+    setTechnicianNotes('');
+  };
+
+  const handleSaveResult = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!enteringResultOrder || !selectedTestForResult) return;
+
+    setSubmitting(true);
+    setError(null);
+    try {
+      const parsedResults = parameterInputs.map((p) => {
+        const num = parseFloat(p.value);
+        return {
+          ...p,
+          value: !isNaN(num) && String(num) === String(p.value).trim() ? num : p.value,
+        };
+      });
+
+      await submitLabResult(enteringResultOrder._id, {
+        testId: selectedTestForResult.testId,
+        results: parsedResults,
+        technicianNotes,
+      });
+
+      setSuccess('Diagnostic parameters submitted for senior clinical review.');
+      setEnteringResultOrder(null);
+      setSelectedTestForResult(null);
+      loadInitialData();
+    } catch (err: any) {
+      setError(err.message || 'Failed to submit lab results');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const handleReviewSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!reviewingResult) return;
+
+    if (reviewAction === 'REJECT' && (!reviewReason || reviewReason.trim().length < 3)) {
+      setError('A mandatory rejection reason of at least 3 characters is required.');
+      return;
+    }
+
+    setSubmitting(true);
+    setError(null);
+    try {
+      await reviewLabResult(reviewingResult._id, {
+        action: reviewAction,
+        notes: reviewNotes,
+        reason: reviewReason,
+      });
+
+      setSuccess(
+        reviewAction === 'APPROVE'
+          ? 'Lab result verified and approved. Available to patient portal.'
+          : 'Lab result rejected and returned to technician queue for revision.',
+      );
+      setReviewingResult(null);
+      loadInitialData();
+    } catch (err: any) {
+      setError(err.message || 'Failed to review lab result');
+    } finally {
+      setSubmitting(false);
     }
   };
 
@@ -202,6 +318,17 @@ export const LabPage: React.FC = () => {
           Order Queue & Specimen Collection ({orders.length})
         </button>
         <button
+          onClick={() => setActiveTab('results')}
+          className={`py-3 px-4 text-xs font-bold border-b-2 transition-colors flex items-center gap-2 ${
+            activeTab === 'results'
+              ? 'border-teal-600 text-teal-700'
+              : 'border-transparent text-slate-500 hover:text-slate-800'
+          }`}
+        >
+          <Activity className="h-4 w-4" />
+          Clinical Results & Approval ({results.length})
+        </button>
+        <button
           onClick={() => setActiveTab('order')}
           className={`py-3 px-4 text-xs font-bold border-b-2 transition-colors flex items-center gap-2 ${
             activeTab === 'order'
@@ -228,7 +355,6 @@ export const LabPage: React.FC = () => {
       {/* TAB 1: ORDER QUEUE */}
       {activeTab === 'queue' && (
         <div className="bg-white rounded-b-xl border border-t-0 border-slate-200 shadow-sm p-6 space-y-4">
-          {/* Status Filters */}
           <div className="flex items-center gap-2 overflow-x-auto pb-2">
             <span className="text-xs font-semibold text-slate-500 mr-2">Status:</span>
             {['ALL', 'ORDERED', 'SAMPLE_COLLECTED', 'IN_PROGRESS', 'COMPLETED'].map((st) => (
@@ -326,26 +452,166 @@ export const LabPage: React.FC = () => {
                       {o.tests?.map((t: any, idx: number) => (
                         <div
                           key={idx}
-                          className="p-2 bg-white rounded border border-slate-200 text-xs flex items-center justify-between"
+                          className="p-2.5 bg-white rounded border border-slate-200 text-xs flex items-center justify-between"
                         >
                           <div>
-                            <span className="font-mono font-bold text-teal-700 mr-2">
-                              {t.testCode}
-                            </span>
-                            <span className="text-slate-800">{t.testName}</span>
+                            <div className="font-semibold text-slate-800 flex items-center gap-1.5">
+                              <span className="font-mono text-teal-700">{t.testCode}</span>
+                              <span>{t.testName}</span>
+                            </div>
+                            <div className="text-[10px] text-slate-400 mt-0.5">
+                              Sample: {t.sampleType} | Status: {t.status}
+                            </div>
                           </div>
-                          <span className="text-[10px] px-1.5 py-0.5 rounded bg-slate-100 text-slate-600">
-                            {t.sampleType}
-                          </span>
+                          {(o.status === 'SAMPLE_COLLECTED' ||
+                            o.status === 'IN_PROGRESS' ||
+                            t.status === 'SAMPLE_COLLECTED') && (
+                            <button
+                              onClick={() => openEnterResultModal(o, t)}
+                              className="px-2 py-1 text-[11px] font-semibold text-teal-700 bg-teal-50 hover:bg-teal-100 rounded border border-teal-200 transition-colors"
+                            >
+                              Enter Results
+                            </button>
+                          )}
                         </div>
                       ))}
                     </div>
                   </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
 
-                  {o.clinicalNotes && (
-                    <div className="text-xs text-slate-600 bg-amber-50/50 p-2.5 rounded border border-amber-200/50">
-                      <span className="font-semibold text-amber-800">Clinical Notes: </span>
-                      {o.clinicalNotes}
+      {/* TAB 2: CLINICAL RESULTS & APPROVAL WORKFLOW */}
+      {activeTab === 'results' && (
+        <div className="bg-white rounded-b-xl border border-t-0 border-slate-200 shadow-sm p-6 space-y-4">
+          <div className="flex items-center justify-between">
+            <h2 className="text-sm font-bold text-slate-800 flex items-center gap-2">
+              <Activity className="h-4 w-4 text-teal-600" />
+              Diagnostic Test Results & Approval Queue ({results.length})
+            </h2>
+          </div>
+
+          {results.length === 0 ? (
+            <div className="p-12 text-center text-slate-400 text-xs">
+              No laboratory results submitted yet.
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 gap-4">
+              {results.map((res) => (
+                <div
+                  key={res._id}
+                  className="p-5 rounded-xl border border-slate-200 bg-white shadow-sm space-y-3"
+                >
+                  <div className="flex flex-col md:flex-row md:items-center justify-between gap-2 border-b border-slate-100 pb-3">
+                    <div className="flex items-center gap-3">
+                      <span className="p-2 bg-slate-100 text-slate-700 rounded-lg font-mono text-xs font-bold">
+                        RES-{res._id.slice(-6).toUpperCase()}
+                      </span>
+                      <div>
+                        <div className="text-xs font-bold text-slate-800">
+                          Order ID: {res.orderId} | Patient ID: {res.patientId}
+                        </div>
+                        <div className="text-[11px] text-slate-400 mt-0.5">
+                          Submitted: {new Date(res.submittedAt || res.createdAt).toLocaleString()}
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="flex items-center gap-2">
+                      <span
+                        className={`px-2.5 py-0.5 rounded-full text-[10px] font-bold ${
+                          res.status === 'APPROVED'
+                            ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+                            : res.status === 'REJECTED'
+                              ? 'bg-rose-50 text-rose-700 border border-rose-200'
+                              : 'bg-amber-50 text-amber-700 border border-amber-200'
+                        }`}
+                      >
+                        {res.status}
+                      </span>
+
+                      {res.status === 'SUBMITTED' && (
+                        <div className="flex items-center gap-1.5">
+                          <button
+                            onClick={() => {
+                              setReviewingResult(res);
+                              setReviewAction('APPROVE');
+                              setReviewReason('');
+                              setReviewNotes('');
+                            }}
+                            className="px-2.5 py-1 text-[11px] font-semibold text-emerald-700 bg-emerald-50 hover:bg-emerald-100 rounded border border-emerald-200 transition-colors flex items-center gap-1"
+                          >
+                            <Check className="h-3 w-3" />
+                            Approve
+                          </button>
+                          <button
+                            onClick={() => {
+                              setReviewingResult(res);
+                              setReviewAction('REJECT');
+                              setReviewReason('');
+                              setReviewNotes('');
+                            }}
+                            className="px-2.5 py-1 text-[11px] font-semibold text-rose-700 bg-rose-50 hover:bg-rose-100 rounded border border-rose-200 transition-colors flex items-center gap-1"
+                          >
+                            <XCircle className="h-3 w-3" />
+                            Reject
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Parameter Results Table */}
+                  <div className="overflow-x-auto">
+                    <table className="min-w-full text-left text-xs divide-y divide-slate-100">
+                      <thead>
+                        <tr className="text-slate-500 font-semibold text-[10px] uppercase border-b border-slate-200">
+                          <th className="py-2">Parameter</th>
+                          <th className="py-2">Observed Value</th>
+                          <th className="py-2">Reference Range</th>
+                          <th className="py-2">Evaluation Flag</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100">
+                        {res.results?.map((param: any, pIdx: number) => (
+                          <tr key={pIdx} className="text-slate-800 text-[11px]">
+                            <td className="py-2 font-medium">{param.parameterName}</td>
+                            <td className="py-2 font-mono font-bold">
+                              {param.value} {param.unit}
+                            </td>
+                            <td className="py-2 text-slate-500">
+                              {param.textRange
+                                ? param.textRange
+                                : param.referenceRangeMin !== undefined
+                                  ? `${param.referenceRangeMin} - ${param.referenceRangeMax} ${param.unit}`
+                                  : 'Standard'}
+                            </td>
+                            <td className="py-2">
+                              <span
+                                className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+                                  param.abnormalFlag === 'NORMAL'
+                                    ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+                                    : param.abnormalFlag.includes('CRITICAL')
+                                      ? 'bg-rose-100 text-rose-800 border border-rose-300 font-extrabold'
+                                      : 'bg-amber-100 text-amber-800 border border-amber-300'
+                                }`}
+                              >
+                                {param.abnormalFlag}
+                              </span>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+
+                  {res.reviewNotes && (
+                    <div className="text-xs p-2.5 rounded bg-slate-50 border border-slate-200 text-slate-600">
+                      <span className="font-semibold text-slate-700">Review Notes: </span>
+                      {res.reviewNotes}
                     </div>
                   )}
                 </div>
@@ -355,7 +621,7 @@ export const LabPage: React.FC = () => {
         </div>
       )}
 
-      {/* TAB 2: ORDER LAB TESTS FORM */}
+      {/* TAB 3: ORDER LAB TESTS FORM */}
       {activeTab === 'order' && (
         <form
           onSubmit={handleCreateOrder}
@@ -499,7 +765,7 @@ export const LabPage: React.FC = () => {
         </form>
       )}
 
-      {/* TAB 3: TEST CATALOGUE */}
+      {/* TAB 4: TEST CATALOGUE */}
       {activeTab === 'catalogue' && (
         <div className="bg-white rounded-b-xl border border-t-0 border-slate-200 shadow-sm p-6 space-y-4">
           <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
@@ -573,6 +839,185 @@ export const LabPage: React.FC = () => {
                 ))}
               </tbody>
             </table>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL 1: ENTER STRUCTURED TEST RESULTS */}
+      {enteringResultOrder && selectedTestForResult && (
+        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-xl shadow-xl border border-slate-200 max-w-2xl w-full p-6 space-y-5 max-h-[90vh] overflow-y-auto">
+            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+              <div>
+                <h3 className="text-sm font-bold text-slate-800">
+                  Enter Results: {selectedTestForResult.testName} ({selectedTestForResult.testCode})
+                </h3>
+                <p className="text-xs text-slate-400">Order: {enteringResultOrder.orderNumber}</p>
+              </div>
+              <button
+                onClick={() => setEnteringResultOrder(null)}
+                className="text-slate-400 hover:text-slate-600 text-sm"
+              >
+                ✕
+              </button>
+            </div>
+
+            <form onSubmit={handleSaveResult} className="space-y-4">
+              <div className="space-y-3">
+                <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider">
+                  Test Parameters & Measured Values
+                </label>
+                {parameterInputs.map((param, pIdx) => (
+                  <div
+                    key={pIdx}
+                    className="p-3 bg-slate-50 rounded-lg border border-slate-200 grid grid-cols-1 md:grid-cols-3 gap-2 items-center"
+                  >
+                    <div className="text-xs font-semibold text-slate-800">
+                      {param.parameterName}
+                      {param.referenceRangeMin !== undefined && (
+                        <div className="text-[10px] text-slate-400">
+                          Normal: {param.referenceRangeMin} - {param.referenceRangeMax} {param.unit}
+                        </div>
+                      )}
+                    </div>
+                    <div className="md:col-span-2 flex items-center gap-2">
+                      <input
+                        type="text"
+                        placeholder="Observed Value"
+                        value={param.value}
+                        onChange={(e) => {
+                          const updated = [...parameterInputs];
+                          updated[pIdx].value = e.target.value;
+                          setParameterInputs(updated);
+                        }}
+                        className="w-full text-xs p-2 rounded border border-slate-300 focus:outline-none focus:ring-1 focus:ring-teal-500 font-mono"
+                        required
+                      />
+                      <span className="text-xs font-semibold text-slate-500 w-16">
+                        {param.unit}
+                      </span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">
+                  Technician Observations & Notes
+                </label>
+                <textarea
+                  rows={2}
+                  placeholder="e.g. Specimen non-hemolyzed, run in duplicate"
+                  value={technicianNotes}
+                  onChange={(e) => setTechnicianNotes(e.target.value)}
+                  className="w-full text-xs p-2 rounded-lg border border-slate-300 focus:outline-none focus:ring-1 focus:ring-teal-500"
+                />
+              </div>
+
+              <div className="flex justify-end gap-2 pt-3 border-t border-slate-100">
+                <button
+                  type="button"
+                  onClick={() => setEnteringResultOrder(null)}
+                  className="px-4 py-2 border border-slate-300 text-slate-700 rounded-lg text-xs font-semibold hover:bg-slate-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={submitting}
+                  className="px-5 py-2 bg-teal-600 text-white rounded-lg text-xs font-semibold hover:bg-teal-700 flex items-center gap-1.5 disabled:opacity-50"
+                >
+                  {submitting ? 'Submitting...' : 'Submit Results'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL 2: CLINICAL REVIEW (APPROVE / REJECT) */}
+      {reviewingResult && (
+        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-xl shadow-xl border border-slate-200 max-w-lg w-full p-6 space-y-4">
+            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+              <h3 className="text-sm font-bold text-slate-800">
+                Clinical Result Review: {reviewAction === 'APPROVE' ? 'Approval' : 'Rejection'}
+              </h3>
+              <button
+                onClick={() => setReviewingResult(null)}
+                className="text-slate-400 hover:text-slate-600 text-sm"
+              >
+                ✕
+              </button>
+            </div>
+
+            <form onSubmit={handleReviewSubmit} className="space-y-4">
+              {reviewAction === 'APPROVE' ? (
+                <div className="space-y-3">
+                  <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-lg text-xs text-emerald-800 flex items-center gap-2">
+                    <CheckCircle className="h-4 w-4 shrink-0 text-emerald-600" />
+                    Approving this result will lock it and make it accessible in the patient portal.
+                  </div>
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700 mb-1">
+                      Attending Remarks (Optional)
+                    </label>
+                    <input
+                      type="text"
+                      placeholder="e.g. Findings consistent with clinical impression"
+                      value={reviewNotes}
+                      onChange={(e) => setReviewNotes(e.target.value)}
+                      className="w-full text-xs p-2 rounded-lg border border-slate-300 focus:outline-none focus:ring-1 focus:ring-teal-500"
+                    />
+                  </div>
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  <div className="p-3 bg-rose-50 border border-rose-200 rounded-lg text-xs text-rose-800 flex items-center gap-2">
+                    <AlertOctagon className="h-4 w-4 shrink-0 text-rose-600" />
+                    Rejecting this result requires a mandatory clinical explanation.
+                  </div>
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700 mb-1">
+                      Mandatory Rejection Reason *
+                    </label>
+                    <textarea
+                      rows={3}
+                      placeholder="e.g. Value discordant with patient symptoms; please repeat test with fresh sample"
+                      value={reviewReason}
+                      onChange={(e) => setReviewReason(e.target.value)}
+                      className="w-full text-xs p-2 rounded-lg border border-slate-300 focus:outline-none focus:ring-1 focus:ring-rose-500"
+                      required
+                    />
+                  </div>
+                </div>
+              )}
+
+              <div className="flex justify-end gap-2 pt-3 border-t border-slate-100">
+                <button
+                  type="button"
+                  onClick={() => setReviewingResult(null)}
+                  className="px-4 py-2 border border-slate-300 text-slate-700 rounded-lg text-xs font-semibold hover:bg-slate-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={submitting}
+                  className={`px-5 py-2 text-white rounded-lg text-xs font-semibold flex items-center gap-1.5 ${
+                    reviewAction === 'APPROVE'
+                      ? 'bg-emerald-600 hover:bg-emerald-700'
+                      : 'bg-rose-600 hover:bg-rose-700'
+                  }`}
+                >
+                  {submitting
+                    ? 'Processing...'
+                    : reviewAction === 'APPROVE'
+                      ? 'Confirm Approval'
+                      : 'Confirm Rejection'}
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}

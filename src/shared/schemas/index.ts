@@ -598,3 +598,44 @@ export const labOrderCreateSchema = z.object({
 export const sampleCollectedSchema = z.object({
   notes: z.string().trim().max(500).optional(),
 });
+
+export const abnormalFlags = [
+  'NORMAL',
+  'LOW',
+  'HIGH',
+  'CRITICAL_LOW',
+  'CRITICAL_HIGH',
+  'ABNORMAL',
+] as const;
+
+export const labResultStatuses = ['DRAFT', 'SUBMITTED', 'APPROVED', 'REJECTED'] as const;
+
+export const labParameterResultInputSchema = z.object({
+  parameterName: z.string().trim().min(1, 'Parameter name is required'),
+  value: z.union([z.number(), z.string().trim().min(1)]),
+  unit: z.string().trim().default(''),
+  referenceRangeMin: z.number().optional(),
+  referenceRangeMax: z.number().optional(),
+  textRange: z.string().trim().optional(),
+  notes: z.string().trim().max(500).optional(),
+});
+
+export const labResultSubmitSchema = z.object({
+  testId: z.string().min(1, 'Test ID is required'),
+  results: z
+    .array(labParameterResultInputSchema)
+    .min(1, 'At least one parameter result is required'),
+  technicianNotes: z.string().trim().max(1000).optional(),
+  pdfAttachmentUrl: z.string().trim().optional(),
+});
+
+export const labResultReviewSchema = z
+  .object({
+    action: z.enum(['APPROVE', 'REJECT']),
+    notes: z.string().trim().max(1000).optional(),
+    reason: z.string().trim().max(1000).optional(),
+  })
+  .refine((data) => data.action !== 'REJECT' || (data.reason && data.reason.trim().length >= 3), {
+    message: 'A mandatory reason of at least 3 characters is required to reject a lab result',
+    path: ['reason'],
+  });

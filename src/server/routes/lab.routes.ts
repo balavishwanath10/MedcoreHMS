@@ -40,3 +40,23 @@ labRouter.patch(
   requireRole(ROLES.LAB_TECHNICIAN, ROLES.NURSE, ROLES.HOSPITAL_ADMIN, ROLES.SUPER_ADMIN),
   (req, res) => labController.markSampleCollected(req, res),
 );
+
+// Submit structured parameter results for an order item (Lab Technician, Doctor, Admin)
+labRouter.post(
+  '/orders/:orderId/results',
+  requireRole(ROLES.LAB_TECHNICIAN, ROLES.DOCTOR, ROLES.HOSPITAL_ADMIN, ROLES.SUPER_ADMIN),
+  (req, res) => labController.submitLabResult(req, res),
+);
+
+// Review & Approve / Reject lab results (Doctor, Hospital Admin, Super Admin)
+labRouter.post(
+  '/results/:id/review',
+  requireRole(ROLES.DOCTOR, ROLES.HOSPITAL_ADMIN, ROLES.SUPER_ADMIN),
+  (req, res) => labController.reviewLabResult(req, res),
+);
+
+// List lab results (Staff see tenant; patients see only APPROVED results)
+labRouter.get('/results', (req, res) => labController.getLabResults(req, res));
+
+// Get single lab result by ID (Patients restricted to APPROVED)
+labRouter.get('/results/:id', (req, res) => labController.getLabResultById(req, res));

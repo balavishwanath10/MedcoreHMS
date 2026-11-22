@@ -502,3 +502,40 @@ export interface ILabOrder {
   createdAt?: string | Date;
   updatedAt?: string | Date;
 }
+
+export type LabResultStatus = 'DRAFT' | 'SUBMITTED' | 'APPROVED' | 'REJECTED';
+
+export type AbnormalFlag =
+  'NORMAL' | 'LOW' | 'HIGH' | 'CRITICAL_LOW' | 'CRITICAL_HIGH' | 'ABNORMAL';
+
+export interface ILabParameterResult {
+  parameterName: string;
+  value: number | string;
+  unit: string;
+  referenceRangeMin?: number;
+  referenceRangeMax?: number;
+  textRange?: string;
+  isAbnormal: boolean;
+  abnormalFlag: AbnormalFlag;
+  notes?: string;
+}
+
+export interface ILabResult {
+  _id?: string;
+  hospitalId: string;
+  orderId: string;
+  testId: string;
+  patientId: string;
+  technicianId: string;
+  results: ILabParameterResult[];
+  technicianNotes?: string;
+  status: LabResultStatus;
+  submittedAt?: string | Date;
+  reviewedBy?: string;
+  reviewedAt?: string | Date;
+  reviewNotes?: string;
+  pdfAttachmentUrl?: string;
+  isDeleted: boolean;
+  createdAt?: string | Date;
+  updatedAt?: string | Date;
+}

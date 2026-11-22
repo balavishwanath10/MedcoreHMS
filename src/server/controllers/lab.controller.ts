@@ -1,6 +1,7 @@
 import { Request, Response } from 'express';
 import { LabTest } from '../models/LabTest.js';
 import { LabOrder } from '../models/LabOrder.js';
+import { LabResult } from '../models/LabResult.js';
 import { PatientProfile } from '../models/PatientProfile.js';
 import { DoctorProfile } from '../models/DoctorProfile.js';
 import { Encounter } from '../models/Encounter.js';
@@ -8,7 +9,10 @@ import {
   labTestCreateSchema,
   labOrderCreateSchema,
   sampleCollectedSchema,
+  labResultSubmitSchema,
+  labResultReviewSchema,
 } from '../../shared/schemas/index.js';
+import { evaluateLabParameter } from '../utils/labEvaluator.js';
 import { recordAuditEvent } from '../utils/auditLogger.js';
 import { logger } from '../utils/logger.js';
 import { ROLES } from '../../shared/constants/roles.js';
@@ -704,6 +708,462 @@ export class LabController {
           code: 'INTERNAL_SERVER_ERROR',
           message: 'Failed to update sample collection status',
         },
+        timestamp: new Date().toISOString(),
+      });
+    }
+  }
+
+  /**
+   * Submit structured diagnostic laboratory results for an order item.
+   * Automatically computes abnormal flags based on test reference ranges.
+   */
+  async submitLabResult(req: Request, res: Response): Promise<void> {
+    try {
+      const orderId = req.params.orderId as string;
+      const order = await LabOrder.findOne({ _id: orderId, isDeleted: false });
+
+      if (!order) {
+        res.status(404).json({
+          success: false,
+          error: { code: 'NOT_FOUND', message: 'Lab order not found' },
+          timestamp: new Date().toISOString(),
+        });
+        return;
+      }
+
+      if (
+        req.user?.role !== ROLES.SUPER_ADMIN &&
+        req.user?.hospitalId &&
+        order.hospitalId !== req.user.hospitalId
+      ) {
+        res.status(403).json({
+          success: false,
+          error: {
+            code: 'CROSS_TENANT_ACCESS_DENIED',
+            message: 'Cannot submit results in another hospital',
+          },
+          timestamp: new Date().toISOString(),
+        });
+        return;
+      }
+
+      const validated = labResultSubmitSchema.parse(req.body);
+
+      // Verify test exists in order
+      const orderTest = order.tests.find((t) => t.testId === validated.testId);
+      if (!orderTest) {
+        res.status(400).json({
+          success: false,
+          error: {
+            code: 'TEST_NOT_IN_ORDER',
+            message: 'The specified test does not exist in this lab order',
+          },
+          timestamp: new Date().toISOString(),
+        });
+        return;
+      }
+
+      // Fetch reference ranges from LabTest catalogue to enrich parameters
+      const labTest = await LabTest.findOne({
+        _id: validated.testId,
+        hospitalId: order.hospitalId,
+      });
+
+      // Automatically evaluate each parameter result
+      const enrichedResults = validated.results.map((param) => {
+        let minNormal = param.referenceRangeMin;
+        let maxNormal = param.referenceRangeMax;
+        let textRange = param.textRange;
+
+        if (labTest?.referenceRanges) {
+          const matchRange = labTest.referenceRanges.find(
+            (r) => r.parameterName.toLowerCase() === param.parameterName.toLowerCase(),
+          );
+          if (matchRange) {
+            if (minNormal === undefined) minNormal = matchRange.minNormal;
+            if (maxNormal === undefined) maxNormal = matchRange.maxNormal;
+            if (!textRange) textRange = matchRange.textRange;
+          }
+        }
+
+        const evaluation = evaluateLabParameter(param.value, minNormal, maxNormal, textRange);
+
+        return {
+          ...param,
+          referenceRangeMin: minNormal,
+          referenceRangeMax: maxNormal,
+          textRange,
+          isAbnormal: evaluation.isAbnormal,
+          abnormalFlag: evaluation.abnormalFlag,
+        };
+      });
+
+      // Create or update LabResult document in SUBMITTED state
+      let labResult = await LabResult.findOne({
+        hospitalId: order.hospitalId,
+        orderId: order._id.toString(),
+        testId: validated.testId,
+        isDeleted: false,
+      });
+
+      if (labResult && labResult.status === 'APPROVED') {
+        res.status(400).json({
+          success: false,
+          error: {
+            code: 'RESULT_ALREADY_APPROVED',
+            message: 'Cannot modify an already approved lab result',
+          },
+          timestamp: new Date().toISOString(),
+        });
+        return;
+      }
+
+      if (labResult) {
+        labResult.results = enrichedResults;
+        labResult.technicianNotes = validated.technicianNotes;
+        labResult.status = 'SUBMITTED';
+        labResult.submittedAt = new Date();
+        labResult.technicianId = req.user?.userId || 'technician';
+        if (validated.pdfAttachmentUrl) labResult.pdfAttachmentUrl = validated.pdfAttachmentUrl;
+        await labResult.save();
+      } else {
+        labResult = await LabResult.create({
+          hospitalId: order.hospitalId,
+          orderId: order._id.toString(),
+          testId: validated.testId,
+          patientId: order.patientId,
+          technicianId: req.user?.userId || 'technician',
+          results: enrichedResults,
+          technicianNotes: validated.technicianNotes,
+          status: 'SUBMITTED',
+          submittedAt: new Date(),
+          pdfAttachmentUrl: validated.pdfAttachmentUrl,
+          isDeleted: false,
+        });
+      }
+
+      // Update order test item status
+      orderTest.status = 'IN_PROGRESS';
+      if (order.status === 'ORDERED' || order.status === 'SAMPLE_COLLECTED') {
+        order.status = 'IN_PROGRESS';
+      }
+      await order.save();
+
+      await recordAuditEvent({
+        hospitalId: order.hospitalId,
+        userId: req.user?.userId || 'unknown',
+        userRole: req.user?.role || 'UNKNOWN',
+        action: 'LAB_RESULT_SUBMIT',
+        entityType: 'LabResult',
+        entityId: labResult._id.toString(),
+        details: {
+          orderId: order._id,
+          testCode: orderTest.testCode,
+          parameterCount: enrichedResults.length,
+        },
+      });
+
+      logger.info('Lab result submitted for clinical review', {
+        resultId: labResult._id,
+        orderId: order._id,
+        testId: validated.testId,
+      });
+
+      res.status(201).json({
+        success: true,
+        data: labResult,
+        timestamp: new Date().toISOString(),
+      });
+    } catch (err: any) {
+      if (err.name === 'ZodError') {
+        res.status(400).json({
+          success: false,
+          error: {
+            code: 'VALIDATION_ERROR',
+            message: 'Invalid result parameters',
+            details: err.errors,
+          },
+          timestamp: new Date().toISOString(),
+        });
+        return;
+      }
+
+      logger.error('Failed to submit lab result', { error: err.message });
+      res.status(500).json({
+        success: false,
+        error: { code: 'INTERNAL_SERVER_ERROR', message: 'Failed to submit lab result' },
+        timestamp: new Date().toISOString(),
+      });
+    }
+  }
+
+  /**
+   * Senior doctor or pathologist review & approval workflow.
+   * Approving locks result and marks test as COMPLETED.
+   * Rejecting sends test back with mandatory rejection reason.
+   */
+  async reviewLabResult(req: Request, res: Response): Promise<void> {
+    try {
+      const id = req.params.id as string;
+      const labResult = await LabResult.findOne({ _id: id, isDeleted: false });
+
+      if (!labResult) {
+        res.status(404).json({
+          success: false,
+          error: { code: 'NOT_FOUND', message: 'Lab result not found' },
+          timestamp: new Date().toISOString(),
+        });
+        return;
+      }
+
+      if (
+        req.user?.role !== ROLES.SUPER_ADMIN &&
+        req.user?.hospitalId &&
+        labResult.hospitalId !== req.user.hospitalId
+      ) {
+        res.status(403).json({
+          success: false,
+          error: {
+            code: 'CROSS_TENANT_ACCESS_DENIED',
+            message: 'Cannot review results in another hospital',
+          },
+          timestamp: new Date().toISOString(),
+        });
+        return;
+      }
+
+      const validated = labResultReviewSchema.parse(req.body);
+
+      const order = await LabOrder.findOne({ _id: labResult.orderId, isDeleted: false });
+
+      if (validated.action === 'APPROVE') {
+        labResult.status = 'APPROVED';
+        labResult.reviewedBy = req.user?.userId;
+        labResult.reviewedAt = new Date();
+        labResult.reviewNotes = validated.notes;
+        await labResult.save();
+
+        if (order) {
+          const orderTest = order.tests.find((t) => t.testId === labResult.testId);
+          if (orderTest) {
+            orderTest.status = 'COMPLETED';
+          }
+          // Check if all tests in order are completed
+          const allCompleted = order.tests.every((t) => t.status === 'COMPLETED');
+          if (allCompleted) {
+            order.status = 'COMPLETED';
+          }
+          await order.save();
+        }
+
+        await recordAuditEvent({
+          hospitalId: labResult.hospitalId,
+          userId: req.user?.userId || 'unknown',
+          userRole: req.user?.role || 'UNKNOWN',
+          action: 'LAB_RESULT_APPROVE',
+          entityType: 'LabResult',
+          entityId: labResult._id.toString(),
+          details: { orderId: labResult.orderId, testId: labResult.testId },
+        });
+
+        logger.info('Lab result approved by clinical reviewer', {
+          resultId: labResult._id,
+          reviewerId: req.user?.userId,
+        });
+      } else {
+        // REJECT action
+        labResult.status = 'REJECTED';
+        labResult.reviewedBy = req.user?.userId;
+        labResult.reviewedAt = new Date();
+        labResult.reviewNotes = validated.reason;
+        await labResult.save();
+
+        if (order) {
+          const orderTest = order.tests.find((t) => t.testId === labResult.testId);
+          if (orderTest) {
+            orderTest.status = 'IN_PROGRESS';
+          }
+          await order.save();
+        }
+
+        await recordAuditEvent({
+          hospitalId: labResult.hospitalId,
+          userId: req.user?.userId || 'unknown',
+          userRole: req.user?.role || 'UNKNOWN',
+          action: 'LAB_RESULT_REJECT',
+          entityType: 'LabResult',
+          entityId: labResult._id.toString(),
+          details: { reason: validated.reason },
+        });
+
+        logger.info('Lab result rejected by clinical reviewer', {
+          resultId: labResult._id,
+          reason: validated.reason,
+        });
+      }
+
+      res.status(200).json({
+        success: true,
+        data: labResult,
+        timestamp: new Date().toISOString(),
+      });
+    } catch (err: any) {
+      if (err.name === 'ZodError') {
+        res.status(400).json({
+          success: false,
+          error: {
+            code: 'VALIDATION_ERROR',
+            message: err.errors[0]?.message || 'Invalid review data',
+          },
+          timestamp: new Date().toISOString(),
+        });
+        return;
+      }
+
+      logger.error('Failed to review lab result', { error: err.message });
+      res.status(500).json({
+        success: false,
+        error: { code: 'INTERNAL_SERVER_ERROR', message: 'Failed to process review' },
+        timestamp: new Date().toISOString(),
+      });
+    }
+  }
+
+  /**
+   * List lab results.
+   * Technicians and clinical staff see results in tenant hospital.
+   * Patients can ONLY access APPROVED results belonging to themselves.
+   */
+  async getLabResults(req: Request, res: Response): Promise<void> {
+    try {
+      const filter: Record<string, any> = { isDeleted: false };
+
+      if (req.user?.role !== ROLES.SUPER_ADMIN) {
+        if (!req.user?.hospitalId) {
+          res.status(403).json({
+            success: false,
+            error: { code: 'CROSS_TENANT_ACCESS_DENIED', message: 'Hospital context is required' },
+            timestamp: new Date().toISOString(),
+          });
+          return;
+        }
+        filter.hospitalId = req.user.hospitalId;
+      }
+
+      // Patient privacy & visibility restriction
+      if (req.user?.role === ROLES.PATIENT) {
+        const patientProfile = await PatientProfile.findOne({
+          userId: req.user.userId,
+          isDeleted: false,
+        });
+
+        if (!patientProfile) {
+          res.status(200).json({ success: true, data: [], timestamp: new Date().toISOString() });
+          return;
+        }
+
+        filter.patientId = patientProfile._id.toString();
+        // Strictly only APPROVED results are viewable by patients
+        filter.status = 'APPROVED';
+      }
+
+      if (req.query.orderId) filter.orderId = req.query.orderId;
+      if (req.query.testId) filter.testId = req.query.testId;
+      if (req.query.status && req.user?.role !== ROLES.PATIENT) filter.status = req.query.status;
+
+      const results = await LabResult.find(filter).sort({ submittedAt: -1 });
+
+      res.status(200).json({
+        success: true,
+        data: results,
+        timestamp: new Date().toISOString(),
+      });
+    } catch (err: any) {
+      logger.error('Failed to list lab results', { error: err.message });
+      res.status(500).json({
+        success: false,
+        error: { code: 'INTERNAL_SERVER_ERROR', message: 'Failed to list lab results' },
+        timestamp: new Date().toISOString(),
+      });
+    }
+  }
+
+  /**
+   * Get single lab result by ID.
+   * Enforces patient ownership and restricts patients from viewing unapproved results.
+   */
+  async getLabResultById(req: Request, res: Response): Promise<void> {
+    try {
+      const id = req.params.id as string;
+      const labResult = await LabResult.findOne({ _id: id, isDeleted: false });
+
+      if (!labResult) {
+        res.status(404).json({
+          success: false,
+          error: { code: 'NOT_FOUND', message: 'Lab result not found' },
+          timestamp: new Date().toISOString(),
+        });
+        return;
+      }
+
+      if (
+        req.user?.role !== ROLES.SUPER_ADMIN &&
+        req.user?.hospitalId &&
+        labResult.hospitalId !== req.user.hospitalId
+      ) {
+        res.status(403).json({
+          success: false,
+          error: {
+            code: 'CROSS_TENANT_ACCESS_DENIED',
+            message: 'Access denied to lab result in another hospital',
+          },
+          timestamp: new Date().toISOString(),
+        });
+        return;
+      }
+
+      // Patient privacy & approved status check
+      if (req.user?.role === ROLES.PATIENT) {
+        const patientProfile = await PatientProfile.findOne({
+          userId: req.user.userId,
+          isDeleted: false,
+        });
+
+        if (!patientProfile || patientProfile._id.toString() !== labResult.patientId.toString()) {
+          res.status(403).json({
+            success: false,
+            error: {
+              code: 'FORBIDDEN',
+              message: 'Patients may only access their own lab results',
+            },
+            timestamp: new Date().toISOString(),
+          });
+          return;
+        }
+
+        if (labResult.status !== 'APPROVED') {
+          res.status(403).json({
+            success: false,
+            error: {
+              code: 'FORBIDDEN_UNAPPROVED',
+              message: 'Unapproved laboratory results are not accessible to patients',
+            },
+            timestamp: new Date().toISOString(),
+          });
+          return;
+        }
+      }
+
+      res.status(200).json({
+        success: true,
+        data: labResult,
+        timestamp: new Date().toISOString(),
+      });
+    } catch (err: any) {
+      logger.error('Failed to get lab result', { error: err.message });
+      res.status(500).json({
+        success: false,
+        error: { code: 'INTERNAL_SERVER_ERROR', message: 'Failed to retrieve lab result' },
         timestamp: new Date().toISOString(),
       });
     }
