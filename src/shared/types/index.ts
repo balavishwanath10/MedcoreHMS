@@ -90,6 +90,27 @@ export interface IDoctorProfile {
   updatedAt?: string | Date;
 }
 
+export interface IDoctorAvailability {
+  _id?: string;
+  hospitalId: string;
+  doctorId: string;
+  dayOfWeek: number; // 0=Sunday, 1=Monday, ..., 6=Saturday
+  startTime: string; // "09:00" (HH:mm)
+  endTime: string; // "17:00" (HH:mm)
+  slotDurationMinutes: number; // e.g. 15, 30, 45, 60
+  isAvailable: boolean;
+  isDeleted?: boolean;
+  createdAt?: string | Date;
+  updatedAt?: string | Date;
+}
+
+export interface ITimeSlot {
+  startTime: string; // "09:00"
+  endTime: string; // "09:30"
+  isBooked: boolean;
+  slotDurationMinutes: number;
+}
+
 export type BloodGroup = 'A+' | 'A-' | 'B+' | 'B-' | 'AB+' | 'AB-' | 'O+' | 'O-' | 'UNKNOWN';
 export type Gender = 'MALE' | 'FEMALE' | 'OTHER';
 

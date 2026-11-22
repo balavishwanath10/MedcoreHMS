@@ -103,3 +103,43 @@ export async function createDoctor(data: any): Promise<any> {
   }
   return result.data;
 }
+
+export async function fetchAvailability(doctorId?: string, dayOfWeek?: number): Promise<any[]> {
+  const params = new URLSearchParams();
+  if (doctorId) params.set('doctorId', doctorId);
+  if (dayOfWeek !== undefined) params.set('dayOfWeek', String(dayOfWeek));
+
+  const url = `/api/availability${params.toString() ? `?${params.toString()}` : ''}`;
+  const response = await fetch(url, {
+    headers: { ...getAuthHeader(), 'Content-Type': 'application/json' },
+  });
+  const result: ApiResponse<any[]> = await response.json();
+  if (!result.success || !result.data) {
+    throw new Error(result.error?.message || 'Failed to fetch availability schedules');
+  }
+  return result.data;
+}
+
+export async function createAvailability(data: any): Promise<any> {
+  const response = await fetch('/api/availability', {
+    method: 'POST',
+    headers: { ...getAuthHeader(), 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  });
+  const result: ApiResponse<any> = await response.json();
+  if (!result.success || !result.data) {
+    throw new Error(result.error?.message || 'Failed to create availability schedule');
+  }
+  return result.data;
+}
+
+export async function fetchAvailableSlots(doctorId: string, date: string): Promise<any> {
+  const response = await fetch(`/api/availability/slots?doctorId=${doctorId}&date=${date}`, {
+    headers: { ...getAuthHeader(), 'Content-Type': 'application/json' },
+  });
+  const result: ApiResponse<any> = await response.json();
+  if (!result.success || !result.data) {
+    throw new Error(result.error?.message || 'Failed to generate time slots');
+  }
+  return result.data;
+}

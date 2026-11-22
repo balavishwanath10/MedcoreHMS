@@ -163,6 +163,63 @@ export const doctorProfileUpdateSchema = z.object({
   isActive: z.boolean().optional(),
 });
 
+export const timeRegex = /^([01]\d|2[0-3]):[0-5]\d$/;
+
+export const doctorAvailabilityCreateSchema = z
+  .object({
+    hospitalId: z.string().min(1, 'Hospital ID is required'),
+    doctorId: z.string().min(1, 'Doctor ID is required'),
+    dayOfWeek: z
+      .number()
+      .int()
+      .min(0, 'Day of week must be between 0 (Sunday) and 6 (Saturday)')
+      .max(6, 'Day of week must be between 0 (Sunday) and 6 (Saturday)'),
+    startTime: z.string().regex(timeRegex, 'Start time must be in HH:mm format (00:00 to 23:59)'),
+    endTime: z.string().regex(timeRegex, 'End time must be in HH:mm format (00:00 to 23:59)'),
+    slotDurationMinutes: z
+      .number()
+      .int()
+      .min(10, 'Slot duration must be at least 10 minutes')
+      .max(120, 'Slot duration cannot exceed 120 minutes')
+      .default(30),
+    isAvailable: z.boolean().default(true),
+  })
+  .refine((data) => data.startTime < data.endTime, {
+    message: 'End time must be later than start time',
+    path: ['endTime'],
+  });
+
+export const doctorAvailabilityUpdateSchema = z
+  .object({
+    startTime: z
+      .string()
+      .regex(timeRegex, 'Start time must be in HH:mm format (00:00 to 23:59)')
+      .optional(),
+    endTime: z
+      .string()
+      .regex(timeRegex, 'End time must be in HH:mm format (00:00 to 23:59)')
+      .optional(),
+    slotDurationMinutes: z
+      .number()
+      .int()
+      .min(10, 'Slot duration must be at least 10 minutes')
+      .max(120, 'Slot duration cannot exceed 120 minutes')
+      .optional(),
+    isAvailable: z.boolean().optional(),
+  })
+  .refine(
+    (data) => {
+      if (data.startTime && data.endTime) {
+        return data.startTime < data.endTime;
+      }
+      return true;
+    },
+    {
+      message: 'End time must be later than start time',
+      path: ['endTime'],
+    },
+  );
+
 export const bloodGroups = ['A+', 'A-', 'B+', 'B-', 'AB+', 'AB-', 'O+', 'O-', 'UNKNOWN'] as const;
 export const genders = ['MALE', 'FEMALE', 'OTHER'] as const;
 
