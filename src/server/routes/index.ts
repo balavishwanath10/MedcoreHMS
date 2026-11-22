@@ -2,6 +2,9 @@ import { Router } from 'express';
 import { healthRouter } from './health.routes.js';
 import { authRouter } from './auth.routes.js';
 import { securityRouter } from './security.routes.js';
+import { hospitalRouter } from './hospital.routes.js';
+import { departmentRouter } from './department.routes.js';
+import { doctorRouter } from './doctor.routes.js';
 
 export const apiRouter = Router();
 
@@ -16,6 +19,18 @@ apiRouter.use('/v1/auth', authRouter);
 apiRouter.use('/security', securityRouter);
 apiRouter.use('/v1/security', securityRouter);
 
+// Mount Hospital Management routes under /api/hospitals and /api/v1/hospitals
+apiRouter.use('/hospitals', hospitalRouter);
+apiRouter.use('/v1/hospitals', hospitalRouter);
+
+// Mount Department routes under /api/departments and /api/v1/departments
+apiRouter.use('/departments', departmentRouter);
+apiRouter.use('/v1/departments', departmentRouter);
+
+// Mount Doctor routes under /api/doctors and /api/v1/doctors
+apiRouter.use('/doctors', doctorRouter);
+apiRouter.use('/v1/doctors', doctorRouter);
+
 // Base route for /api
 apiRouter.get('/', (_req, res) => {
   res.json({
@@ -29,6 +44,9 @@ apiRouter.get('/', (_req, res) => {
         health: '/api/health',
         auth: '/api/auth',
         security: '/api/security',
+        hospitals: '/api/hospitals',
+        departments: '/api/departments',
+        doctors: '/api/doctors',
       },
     },
     timestamp: new Date().toISOString(),

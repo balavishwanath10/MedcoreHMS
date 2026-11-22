@@ -9,6 +9,13 @@ export const addressSchema = z.object({
   country: z.string().trim().min(2, 'Country must be at least 2 characters'),
 });
 
+export const hospitalSettingsSchema = z.object({
+  timezone: z.string().default('UTC'),
+  currency: z.string().default('USD'),
+  appointmentSlotDurationMinutes: z.number().min(10).max(120).default(30),
+  allowPatientPortalRegistration: z.boolean().default(true),
+});
+
 export const hospitalCreateSchema = z.object({
   name: z.string().trim().min(2, 'Hospital name must be at least 2 characters').max(100),
   code: z
@@ -17,12 +24,28 @@ export const hospitalCreateSchema = z.object({
     .min(2, 'Hospital code must be at least 2 characters')
     .max(10)
     .toUpperCase(),
+  slug: z.string().trim().toLowerCase().optional(),
   email: z.string().trim().email('Invalid hospital email address'),
   phone: z.string().trim().min(7, 'Phone number must be at least 7 characters'),
   address: addressSchema,
   licenseNumber: z.string().trim().min(3, 'License number is required'),
   taxId: z.string().trim().optional(),
   status: z.enum(['ACTIVE', 'SUSPENDED', 'ONBOARDING', 'INACTIVE']).default('ONBOARDING'),
+  settings: hospitalSettingsSchema.partial().optional(),
+});
+
+export const hospitalUpdateSchema = z.object({
+  name: z.string().trim().min(2).max(100).optional(),
+  phone: z.string().trim().min(7).optional(),
+  email: z.string().trim().email().optional(),
+  address: addressSchema.optional(),
+  taxId: z.string().trim().optional(),
+  settings: hospitalSettingsSchema.partial().optional(),
+});
+
+export const hospitalStatusUpdateSchema = z.object({
+  status: z.enum(['ACTIVE', 'SUSPENDED', 'ONBOARDING', 'INACTIVE']),
+  reason: z.string().trim().optional(),
 });
 
 export const registerSchema = z.object({
@@ -102,6 +125,18 @@ export const departmentCreateSchema = z.object({
   isActive: z.boolean().default(true),
 });
 
+export const departmentUpdateSchema = z.object({
+  name: z
+    .string()
+    .trim()
+    .min(2, 'Department name must be at least 2 characters')
+    .max(100)
+    .optional(),
+  description: z.string().trim().max(500).optional(),
+  headDoctorId: z.string().optional().nullable(),
+  isActive: z.boolean().optional(),
+});
+
 export const doctorProfileCreateSchema = z.object({
   hospitalId: z.string().min(1, 'Hospital ID is required'),
   userId: z.string().min(1, 'User ID is required'),
@@ -113,6 +148,19 @@ export const doctorProfileCreateSchema = z.object({
   consultationFee: z.number().min(0, 'Consultation fee cannot be negative'),
   bio: z.string().trim().max(1000).optional(),
   isActive: z.boolean().default(true),
+});
+
+export const doctorProfileUpdateSchema = z.object({
+  departmentId: z.string().min(1, 'Department ID is required').optional(),
+  specialization: z.string().trim().min(2, 'Specialization is required').optional(),
+  qualifications: z
+    .array(z.string().trim())
+    .min(1, 'At least one qualification is required')
+    .optional(),
+  experienceYears: z.number().int().min(0, 'Experience years cannot be negative').optional(),
+  consultationFee: z.number().min(0, 'Consultation fee cannot be negative').optional(),
+  bio: z.string().trim().max(1000).optional(),
+  isActive: z.boolean().optional(),
 });
 
 export const bloodGroups = ['A+', 'A-', 'B+', 'B-', 'AB+', 'AB-', 'O+', 'O-', 'UNKNOWN'] as const;
