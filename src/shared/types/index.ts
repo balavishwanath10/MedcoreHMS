@@ -232,6 +232,8 @@ export interface IEncounter {
   historyOfPresentIllness?: string;
   clinicalNotes?: string;
   assessment?: string;
+  diagnoses?: IDiagnosis[];
+  treatmentPlan?: ITreatmentPlan;
   signedAt?: string | Date | null;
   signedBy?: string | null;
   addenda?: IEncounterAddendum[];

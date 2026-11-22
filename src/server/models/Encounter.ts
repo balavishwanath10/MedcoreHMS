@@ -1,9 +1,49 @@
 import mongoose, { Schema, Document } from 'mongoose';
-import { IEncounter, IVitals, ISymptom, IEncounterAddendum } from '../../shared/types/index.js';
+import {
+  IEncounter,
+  IVitals,
+  ISymptom,
+  IEncounterAddendum,
+  IDiagnosis,
+  ITreatmentPlan,
+} from '../../shared/types/index.js';
 
 export interface EncounterDocument extends Omit<IEncounter, '_id'>, Document {
   _id: mongoose.Types.ObjectId;
 }
+
+const DiagnosisSchema = new Schema<IDiagnosis>(
+  {
+    code: { type: String, required: true, trim: true },
+    description: { type: String, required: true, trim: true },
+    type: { type: String, enum: ['DIFFERENTIAL', 'CONFIRMED'], required: true },
+    diagnosedAt: { type: Date, default: Date.now },
+    diagnosedBy: { type: String, required: true },
+    notes: { type: String, trim: true },
+  },
+  { _id: false },
+);
+
+const PrescriptionItemSchema = new Schema(
+  {
+    medicationName: { type: String, required: true, trim: true },
+    dosage: { type: String, required: true, trim: true },
+    frequency: { type: String, required: true, trim: true },
+    duration: { type: String, required: true, trim: true },
+    instructions: { type: String, trim: true },
+  },
+  { _id: false },
+);
+
+const TreatmentPlanSchema = new Schema<ITreatmentPlan>(
+  {
+    instructions: { type: String, required: true, trim: true },
+    prescriptions: [PrescriptionItemSchema],
+    followUpDate: { type: Date },
+    lifestyleRecommendations: [{ type: String, trim: true }],
+  },
+  { _id: false },
+);
 
 const VitalsSchema = new Schema<IVitals>(
   {
@@ -106,6 +146,11 @@ const EncounterSchema = new Schema<EncounterDocument>(
     assessment: {
       type: String,
       trim: true,
+    },
+    diagnoses: [DiagnosisSchema],
+    treatmentPlan: {
+      type: TreatmentPlanSchema,
+      required: false,
     },
     signedAt: {
       type: Date,

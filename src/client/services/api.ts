@@ -288,3 +288,92 @@ export async function addEncounterAddendum(
   }
   return result.data;
 }
+
+// Day 12 EMR Clinical History APIs (Allergies, Vaccinations, Family History, Timeline)
+export async function createAllergy(data: any): Promise<any> {
+  const response = await fetch('/api/emr/allergies', {
+    method: 'POST',
+    headers: { ...getAuthHeader(), 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  });
+  const result: ApiResponse<any> = await response.json();
+  if (!result.success || !result.data) {
+    throw new Error(result.error?.message || 'Failed to record allergy');
+  }
+  return result.data;
+}
+
+export async function fetchAllergies(patientId?: string): Promise<any[]> {
+  const url = patientId ? `/api/emr/allergies?patientId=${patientId}` : '/api/emr/allergies';
+  const response = await fetch(url, {
+    headers: { ...getAuthHeader(), 'Content-Type': 'application/json' },
+  });
+  const result: ApiResponse<any[]> = await response.json();
+  if (!result.success || !result.data) {
+    throw new Error(result.error?.message || 'Failed to fetch allergies');
+  }
+  return result.data;
+}
+
+export async function createVaccination(data: any): Promise<any> {
+  const response = await fetch('/api/emr/vaccinations', {
+    method: 'POST',
+    headers: { ...getAuthHeader(), 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  });
+  const result: ApiResponse<any> = await response.json();
+  if (!result.success || !result.data) {
+    throw new Error(result.error?.message || 'Failed to record vaccination');
+  }
+  return result.data;
+}
+
+export async function fetchVaccinations(patientId?: string): Promise<any[]> {
+  const url = patientId ? `/api/emr/vaccinations?patientId=${patientId}` : '/api/emr/vaccinations';
+  const response = await fetch(url, {
+    headers: { ...getAuthHeader(), 'Content-Type': 'application/json' },
+  });
+  const result: ApiResponse<any[]> = await response.json();
+  if (!result.success || !result.data) {
+    throw new Error(result.error?.message || 'Failed to fetch vaccinations');
+  }
+  return result.data;
+}
+
+export async function createFamilyHistory(data: any): Promise<any> {
+  const response = await fetch('/api/emr/family-history', {
+    method: 'POST',
+    headers: { ...getAuthHeader(), 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  });
+  const result: ApiResponse<any> = await response.json();
+  if (!result.success || !result.data) {
+    throw new Error(result.error?.message || 'Failed to record family history');
+  }
+  return result.data;
+}
+
+export async function fetchFamilyHistories(patientId?: string): Promise<any[]> {
+  const url = patientId
+    ? `/api/emr/family-history?patientId=${patientId}`
+    : '/api/emr/family-history';
+  const response = await fetch(url, {
+    headers: { ...getAuthHeader(), 'Content-Type': 'application/json' },
+  });
+  const result: ApiResponse<any[]> = await response.json();
+  if (!result.success || !result.data) {
+    throw new Error(result.error?.message || 'Failed to fetch family histories');
+  }
+  return result.data;
+}
+
+export async function fetchPatientTimeline(patientId: string): Promise<any> {
+  const response = await fetch(`/api/emr/patients/${patientId}/timeline`, {
+    headers: { ...getAuthHeader(), 'Content-Type': 'application/json' },
+  });
+  const result: ApiResponse<any> = await response.json();
+  if (!result.success || !result.data) {
+    throw new Error(result.error?.message || 'Failed to fetch patient timeline');
+  }
+  return result.data;
+}

@@ -317,6 +317,29 @@ export const symptomSchema = z.object({
   notes: z.string().trim().max(1000).optional(),
 });
 
+// Day 12 Clinical History Schemas (Diagnoses, Treatment, Allergies, Vaccinations, Family History)
+export const diagnosisSchema = z.object({
+  code: z.string().trim().min(2, 'ICD-10 code required').max(10),
+  description: z.string().trim().min(2, 'Diagnosis description required').max(250),
+  type: z.enum(['DIFFERENTIAL', 'CONFIRMED']),
+  notes: z.string().trim().max(1000).optional(),
+});
+
+export const prescriptionItemSchema = z.object({
+  medicationName: z.string().trim().min(2, 'Medication name required').max(200),
+  dosage: z.string().trim().min(1, 'Dosage required').max(100),
+  frequency: z.string().trim().min(1, 'Frequency required').max(100),
+  duration: z.string().trim().min(1, 'Duration required').max(100),
+  instructions: z.string().trim().max(500).optional(),
+});
+
+export const treatmentPlanSchema = z.object({
+  instructions: z.string().trim().min(2, 'Treatment instructions required').max(5000),
+  prescriptions: z.array(prescriptionItemSchema).optional(),
+  followUpDate: z.coerce.date().optional(),
+  lifestyleRecommendations: z.array(z.string().trim()).optional(),
+});
+
 export const encounterCreateSchema = z.object({
   hospitalId: z.string().min(1, 'Hospital ID is required'),
   patientId: z.string().min(1, 'Patient ID is required'),
@@ -332,6 +355,8 @@ export const encounterCreateSchema = z.object({
   historyOfPresentIllness: z.string().trim().max(5000).optional(),
   clinicalNotes: z.string().trim().max(5000).optional(),
   assessment: z.string().trim().max(5000).optional(),
+  diagnoses: z.array(diagnosisSchema).optional(),
+  treatmentPlan: treatmentPlanSchema.optional(),
 });
 
 export const encounterUpdateSchema = z.object({
@@ -341,6 +366,8 @@ export const encounterUpdateSchema = z.object({
   historyOfPresentIllness: z.string().trim().max(5000).optional(),
   clinicalNotes: z.string().trim().max(5000).optional(),
   assessment: z.string().trim().max(5000).optional(),
+  diagnoses: z.array(diagnosisSchema).optional(),
+  treatmentPlan: treatmentPlanSchema.optional(),
 });
 
 export const encounterAddendumSchema = z.object({
@@ -358,4 +385,36 @@ export const encounterSignSchema = z.object({
       message: 'Explicit confirmation is required to finalize and sign encounter',
     }),
   }),
+});
+
+export const allergyCreateSchema = z.object({
+  hospitalId: z.string().min(1, 'Hospital ID is required'),
+  patientId: z.string().min(1, 'Patient ID is required'),
+  allergen: z.string().trim().min(2, 'Allergen name is required').max(200),
+  reaction: z.string().trim().min(2, 'Reaction description is required').max(500),
+  severity: z.enum(['MILD', 'MODERATE', 'SEVERE', 'LIFE_THREATENING']),
+  isAdverseDrugReaction: z.boolean().default(false),
+  diagnosedDate: z.coerce.date().optional(),
+});
+
+export const vaccinationCreateSchema = z.object({
+  hospitalId: z.string().min(1, 'Hospital ID is required'),
+  patientId: z.string().min(1, 'Patient ID is required'),
+  vaccineName: z.string().trim().min(2, 'Vaccine name is required').max(200),
+  batchNumber: z.string().trim().max(100).optional(),
+  administeredDate: z.coerce.date().default(() => new Date()),
+  administeredBy: z.string().trim().max(200).optional(),
+  nextDueDate: z.coerce.date().optional(),
+});
+
+export const familyHistoryCreateSchema = z.object({
+  hospitalId: z.string().min(1, 'Hospital ID is required'),
+  patientId: z.string().min(1, 'Patient ID is required'),
+  relationship: z.string().trim().min(2, 'Relationship is required').max(100),
+  condition: z.string().trim().min(2, 'Condition is required').max(200),
+  hasDiabetes: z.boolean().default(false),
+  hasHypertension: z.boolean().default(false),
+  hasCancer: z.boolean().default(false),
+  hasCardiacDisease: z.boolean().default(false),
+  notes: z.string().trim().max(1000).optional(),
 });

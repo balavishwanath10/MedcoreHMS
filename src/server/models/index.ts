@@ -7,3 +7,6 @@ export * from './RefreshToken.js';
 export * from './DoctorAvailability.js';
 export * from './Appointment.js';
 export * from './Encounter.js';
+export * from './Allergy.js';
+export * from './Vaccination.js';
+export * from './FamilyHistory.js';

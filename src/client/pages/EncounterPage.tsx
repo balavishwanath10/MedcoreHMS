@@ -6,14 +6,16 @@ import {
   AlertTriangle,
   CheckCircle,
   Clock,
-  Heart,
-  Thermometer,
-  Wind,
   ShieldAlert,
   FileCheck,
   Send,
   Plus,
   Trash2,
+  Syringe,
+  AlertCircle,
+  Users,
+  History,
+  Pill,
 } from 'lucide-react';
 import {
   fetchEncounters,
@@ -21,6 +23,13 @@ import {
   createEncounter,
   signEncounter,
   addEncounterAddendum,
+  createAllergy,
+  fetchAllergies,
+  createVaccination,
+  fetchVaccinations,
+  createFamilyHistory,
+  fetchFamilyHistories,
+  fetchPatientTimeline,
 } from '../services/api';
 import {
   calculateBmi,
@@ -29,10 +38,19 @@ import {
 } from '../../server/utils/vitalsCalculator';
 
 export const EncounterPage: React.FC = () => {
+  const [activeTab, setActiveTab] = useState<
+    'encounters' | 'newEncounter' | 'allergies' | 'vaccinations' | 'familyHistory' | 'timeline'
+  >('encounters');
+
   const [encounters, setEncounters] = useState<any[]>([]);
   const [doctors, setDoctors] = useState<any[]>([]);
+  const [allergies, setAllergies] = useState<any[]>([]);
+  const [vaccinations, setVaccinations] = useState<any[]>([]);
+  const [familyHistories, setFamilyHistories] = useState<any[]>([]);
+  const [timelineData, setTimelineData] = useState<any | null>(null);
+
   const [selectedEncounter, setSelectedEncounter] = useState<any | null>(null);
-  const [activeTab, setActiveTab] = useState<'list' | 'new'>('list');
+  const [filterPatientId, setFilterPatientId] = useState<string>('');
   const [loading, setLoading] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
@@ -60,10 +78,46 @@ export const EncounterPage: React.FC = () => {
     Array<{ name: string; severity: 'MILD' | 'MODERATE' | 'SEVERE'; duration?: string }>
   >([{ name: '', severity: 'MODERATE', duration: '' }]);
 
+  // Diagnoses input list (ICD-10)
+  const [diagnoses, setDiagnoses] = useState<
+    Array<{ code: string; description: string; type: 'DIFFERENTIAL' | 'CONFIRMED'; notes?: string }>
+  >([{ code: 'I10', description: 'Essential (primary) hypertension', type: 'CONFIRMED' }]);
+
+  // Treatment Plan
+  const [treatmentInstructions, setTreatmentInstructions] = useState<string>('');
+  const [prescriptions, setPrescriptions] = useState<
+    Array<{ medicationName: string; dosage: string; frequency: string; duration: string }>
+  >([]);
+
   // Addendum Form State
   const [amendmentReason, setAmendmentReason] = useState<string>('');
   const [addendumNotes, setAddendumNotes] = useState<string>('');
   const [isSubmittingAddendum, setIsSubmittingAddendum] = useState<boolean>(false);
+
+  // Allergy Form State
+  const [allergyPatientId, setAllergyPatientId] = useState<string>('');
+  const [allergen, setAllergen] = useState<string>('');
+  const [allergyReaction, setAllergyReaction] = useState<string>('');
+  const [allergySeverity, setAllergySeverity] = useState<
+    'MILD' | 'MODERATE' | 'SEVERE' | 'LIFE_THREATENING'
+  >('MODERATE');
+  const [isAdverseDrugReaction, setIsAdverseDrugReaction] = useState<boolean>(false);
+
+  // Vaccination Form State
+  const [vaxPatientId, setVaxPatientId] = useState<string>('');
+  const [vaccineName, setVaccineName] = useState<string>('');
+  const [vaxBatch, setVaxBatch] = useState<string>('');
+  const [vaxDate, setVaxDate] = useState<string>(new Date().toISOString().split('T')[0]);
+  const [vaxNextDue, setVaxNextDue] = useState<string>('');
+
+  // Family History Form State
+  const [famPatientId, setFamPatientId] = useState<string>('');
+  const [relationship, setRelationship] = useState<string>('FATHER');
+  const [condition, setCondition] = useState<string>('');
+  const [hasDiabetes, setHasDiabetes] = useState<boolean>(false);
+  const [hasHypertension, setHasHypertension] = useState<boolean>(false);
+  const [hasCancer, setHasCancer] = useState<boolean>(false);
+  const [hasCardiacDisease, setHasCardiacDisease] = useState<boolean>(false);
 
   // Real-time calculations
   const liveBmi = calculateBmi(weightKg, heightCm);
@@ -81,9 +135,18 @@ export const EncounterPage: React.FC = () => {
     setLoading(true);
     setError(null);
     try {
-      const [encs, docs] = await Promise.all([fetchEncounters(), fetchDoctors()]);
+      const [encs, docs, alls, vaxs, fams] = await Promise.all([
+        fetchEncounters(),
+        fetchDoctors(),
+        fetchAllergies(),
+        fetchVaccinations(),
+        fetchFamilyHistories(),
+      ]);
       setEncounters(encs);
       setDoctors(docs);
+      setAllergies(alls);
+      setVaccinations(vaxs);
+      setFamilyHistories(fams);
       if (docs.length > 0 && !doctorId) {
         setDoctorId(docs[0]._id);
       }
@@ -109,10 +172,15 @@ export const EncounterPage: React.FC = () => {
     setSymptoms(symptoms.filter((_, i) => i !== index));
   };
 
-  const handleSymptomChange = (index: number, field: string, value: string) => {
-    const updated = [...symptoms];
-    updated[index] = { ...updated[index], [field]: value };
-    setSymptoms(updated);
+  const handleAddDiagnosis = () => {
+    setDiagnoses([...diagnoses, { code: '', description: '', type: 'CONFIRMED' }]);
+  };
+
+  const handleAddPrescription = () => {
+    setPrescriptions([
+      ...prescriptions,
+      { medicationName: '', dosage: '500mg', frequency: 'Twice daily', duration: '5 days' },
+    ]);
   };
 
   const handleCreateEncounter = async (e: React.FormEvent) => {
@@ -128,8 +196,12 @@ export const EncounterPage: React.FC = () => {
 
     try {
       const validSymptoms = symptoms.filter((s) => s.name.trim().length > 0);
+      const validDiagnoses = diagnoses.filter(
+        (d) => d.code.trim().length > 0 && d.description.trim().length > 0,
+      );
+
       const payload = {
-        hospitalId: 'default', // handled by tenant middleware if non-superadmin
+        hospitalId: 'default',
         patientId,
         doctorId,
         chiefComplaint,
@@ -147,6 +219,13 @@ export const EncounterPage: React.FC = () => {
           weightKg: Number(weightKg),
         },
         symptoms: validSymptoms,
+        diagnoses: validDiagnoses,
+        treatmentPlan: treatmentInstructions.trim()
+          ? {
+              instructions: treatmentInstructions,
+              prescriptions,
+            }
+          : undefined,
       };
 
       const created = await createEncounter(payload);
@@ -156,7 +235,7 @@ export const EncounterPage: React.FC = () => {
       setClinicalNotes('');
       setAssessment('');
       setSelectedEncounter(created);
-      setActiveTab('list');
+      setActiveTab('encounters');
       loadData();
     } catch (err: any) {
       setError(err.message);
@@ -168,7 +247,7 @@ export const EncounterPage: React.FC = () => {
   const handleSignEncounter = async (id: string) => {
     if (
       !window.confirm(
-        'Are you sure you want to finalize and SIGN this clinical encounter? It will become IMMUTABLE.',
+        'Are you sure you want to finalize and SIGN this clinical encounter? It will become strictly IMMUTABLE.',
       )
     ) {
       return;
@@ -212,6 +291,110 @@ export const EncounterPage: React.FC = () => {
       setError(err.message);
     } finally {
       setIsSubmittingAddendum(false);
+    }
+  };
+
+  const handleCreateAllergy = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!allergyPatientId || !allergen || !allergyReaction) {
+      setError('Patient ID, Allergen and Reaction are required.');
+      return;
+    }
+    setLoading(true);
+    setError(null);
+    try {
+      await createAllergy({
+        hospitalId: 'default',
+        patientId: allergyPatientId,
+        allergen,
+        reaction: allergyReaction,
+        severity: allergySeverity,
+        isAdverseDrugReaction,
+      });
+      setSuccess('Patient allergy record added.');
+      setAllergen('');
+      setAllergyReaction('');
+      loadData();
+    } catch (err: any) {
+      setError(err.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleCreateVaccination = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!vaxPatientId || !vaccineName) {
+      setError('Patient ID and Vaccine Name are required.');
+      return;
+    }
+    setLoading(true);
+    setError(null);
+    try {
+      await createVaccination({
+        hospitalId: 'default',
+        patientId: vaxPatientId,
+        vaccineName,
+        batchNumber: vaxBatch,
+        administeredDate: vaxDate,
+        nextDueDate: vaxNextDue || undefined,
+      });
+      setSuccess('Vaccination record created.');
+      setVaccineName('');
+      setVaxBatch('');
+      loadData();
+    } catch (err: any) {
+      setError(err.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleCreateFamilyHistory = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!famPatientId || !condition) {
+      setError('Patient ID and Condition are required.');
+      return;
+    }
+    setLoading(true);
+    setError(null);
+    try {
+      await createFamilyHistory({
+        hospitalId: 'default',
+        patientId: famPatientId,
+        relationship,
+        condition,
+        hasDiabetes,
+        hasHypertension,
+        hasCancer,
+        hasCardiacDisease,
+      });
+      setSuccess('Family medical history record created.');
+      setCondition('');
+      loadData();
+    } catch (err: any) {
+      setError(err.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleLoadTimeline = async () => {
+    if (!filterPatientId.trim()) {
+      setError('Please enter a Patient Profile ID to load longitudinal timeline.');
+      return;
+    }
+    setLoading(true);
+    setError(null);
+    try {
+      const res = await fetchPatientTimeline(filterPatientId.trim());
+      setTimelineData(res);
+      setSuccess('Longitudinal patient clinical timeline loaded.');
+    } catch (err: any) {
+      setError(err.message);
+      setTimelineData(null);
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -263,34 +446,78 @@ export const EncounterPage: React.FC = () => {
           <div>
             <h1 className="text-2xl font-bold text-slate-900 flex items-center">
               <FileText className="h-6 w-6 text-teal-600 mr-2" />
-              EMR Clinical Encounters & Vitals
+              EMR Clinical Records & Longitudinal Patient History
             </h1>
             <p className="text-sm text-slate-500 mt-1">
-              Append-only medical records with automatic BMI categorization, abnormal vital flags,
-              and addendum tracking.
+              Encounters, ICD-10 Diagnoses, Treatment Plans, Allergies, Immunizations, and
+              Hereditary Risk Profiles.
             </p>
           </div>
-          <div className="flex items-center space-x-2">
+          <div className="flex flex-wrap items-center gap-1.5">
             <button
-              onClick={() => setActiveTab('list')}
-              className={`px-3.5 py-2 text-xs font-medium rounded-lg border transition-colors ${
-                activeTab === 'list'
+              onClick={() => setActiveTab('encounters')}
+              className={`px-3 py-1.5 text-xs font-medium rounded-lg border transition-colors ${
+                activeTab === 'encounters'
                   ? 'bg-teal-600 text-white border-teal-600 shadow-sm'
                   : 'bg-white text-slate-700 border-slate-300 hover:bg-slate-50'
               }`}
             >
-              Encounter Records
+              Encounters ({encounters.length})
             </button>
             <button
-              onClick={() => setActiveTab('new')}
-              className={`px-3.5 py-2 text-xs font-medium rounded-lg border flex items-center transition-colors ${
-                activeTab === 'new'
+              onClick={() => setActiveTab('newEncounter')}
+              className={`px-3 py-1.5 text-xs font-medium rounded-lg border flex items-center transition-colors ${
+                activeTab === 'newEncounter'
                   ? 'bg-teal-600 text-white border-teal-600 shadow-sm'
                   : 'bg-white text-slate-700 border-slate-300 hover:bg-slate-50'
               }`}
             >
-              <PlusCircle className="w-3.5 h-3.5 mr-1.5" />
-              New Clinical Encounter
+              <PlusCircle className="w-3.5 h-3.5 mr-1" />
+              New Encounter
+            </button>
+            <button
+              onClick={() => setActiveTab('allergies')}
+              className={`px-3 py-1.5 text-xs font-medium rounded-lg border flex items-center transition-colors ${
+                activeTab === 'allergies'
+                  ? 'bg-teal-600 text-white border-teal-600 shadow-sm'
+                  : 'bg-white text-slate-700 border-slate-300 hover:bg-slate-50'
+              }`}
+            >
+              <AlertCircle className="w-3.5 h-3.5 mr-1" />
+              Allergies ({allergies.length})
+            </button>
+            <button
+              onClick={() => setActiveTab('vaccinations')}
+              className={`px-3 py-1.5 text-xs font-medium rounded-lg border flex items-center transition-colors ${
+                activeTab === 'vaccinations'
+                  ? 'bg-teal-600 text-white border-teal-600 shadow-sm'
+                  : 'bg-white text-slate-700 border-slate-300 hover:bg-slate-50'
+              }`}
+            >
+              <Syringe className="w-3.5 h-3.5 mr-1" />
+              Immunizations ({vaccinations.length})
+            </button>
+            <button
+              onClick={() => setActiveTab('familyHistory')}
+              className={`px-3 py-1.5 text-xs font-medium rounded-lg border flex items-center transition-colors ${
+                activeTab === 'familyHistory'
+                  ? 'bg-teal-600 text-white border-teal-600 shadow-sm'
+                  : 'bg-white text-slate-700 border-slate-300 hover:bg-slate-50'
+              }`}
+            >
+              <Users className="w-3.5 h-3.5 mr-1" />
+              Family History ({familyHistories.length})
+            </button>
+            <button
+              onClick={() => setActiveTab('timeline')}
+              className={`px-3 py-1.5 text-xs font-medium rounded-lg border flex items-center transition-colors ${
+                activeTab === 'timeline'
+                  ? 'bg-teal-600 text-white border-teal-600 shadow-sm'
+                  : 'bg-white text-slate-700 border-slate-300 hover:bg-slate-50'
+              }`}
+            >
+              <History className="w-3.5 h-3.5 mr-1" />
+              Patient Timeline
             </button>
           </div>
         </div>
@@ -310,8 +537,10 @@ export const EncounterPage: React.FC = () => {
         </div>
       )}
 
-      {/* New Encounter Form */}
-      {activeTab === 'new' && (
+      {/* =========================================================================
+          TAB 1: NEW ENCOUNTER FORM
+          ========================================================================= */}
+      {activeTab === 'newEncounter' && (
         <form onSubmit={handleCreateEncounter} className="space-y-6">
           <div className="bg-white rounded-lg shadow-sm border border-slate-200 p-6 space-y-6">
             <h2 className="text-lg font-semibold text-slate-900 border-b pb-3">
@@ -343,7 +572,7 @@ export const EncounterPage: React.FC = () => {
                 </label>
                 <input
                   type="text"
-                  placeholder="e.g. 6b02fb0f171afbe526fce7eb"
+                  placeholder="e.g. 6b02fe37fd3ffcc4f35ad75a"
                   value={patientId}
                   onChange={(e) => setPatientId(e.target.value)}
                   className="w-full text-xs rounded-md border-slate-300 shadow-sm p-2 border"
@@ -457,7 +686,9 @@ export const EncounterPage: React.FC = () => {
                   <div className="text-xl font-bold text-slate-900 flex items-center space-x-2">
                     <span>{liveBmi} kg/m²</span>
                     <span
-                      className={`text-xs px-2 py-0.5 rounded font-medium ${getBmiBadgeColor(liveBmiCategory)}`}
+                      className={`text-xs px-2 py-0.5 rounded font-medium ${getBmiBadgeColor(
+                        liveBmiCategory,
+                      )}`}
                     >
                       {liveBmiCategory}
                     </span>
@@ -522,12 +753,20 @@ export const EncounterPage: React.FC = () => {
                       type="text"
                       placeholder="Symptom name (e.g. Cough)"
                       value={s.name}
-                      onChange={(e) => handleSymptomChange(idx, 'name', e.target.value)}
+                      onChange={(e) => {
+                        const updated = [...symptoms];
+                        updated[idx].name = e.target.value;
+                        setSymptoms(updated);
+                      }}
                       className="flex-1 text-xs rounded-md border-slate-300 shadow-sm p-2 border"
                     />
                     <select
                       value={s.severity}
-                      onChange={(e) => handleSymptomChange(idx, 'severity', e.target.value)}
+                      onChange={(e) => {
+                        const updated = [...symptoms];
+                        updated[idx].severity = e.target.value as any;
+                        setSymptoms(updated);
+                      }}
                       className="text-xs rounded-md border-slate-300 shadow-sm p-2 border"
                     >
                       <option value="MILD">Mild</option>
@@ -538,7 +777,11 @@ export const EncounterPage: React.FC = () => {
                       type="text"
                       placeholder="Duration (e.g. 3 days)"
                       value={s.duration || ''}
-                      onChange={(e) => handleSymptomChange(idx, 'duration', e.target.value)}
+                      onChange={(e) => {
+                        const updated = [...symptoms];
+                        updated[idx].duration = e.target.value;
+                        setSymptoms(updated);
+                      }}
                       className="w-32 text-xs rounded-md border-slate-300 shadow-sm p-2 border"
                     />
                     {symptoms.length > 1 && (
@@ -568,17 +811,138 @@ export const EncounterPage: React.FC = () => {
               />
             </div>
 
+            <h2 className="text-lg font-semibold text-slate-900 border-b pb-3 pt-2">
+              4. ICD-10 Diagnoses & Treatment Plan
+            </h2>
+            <div>
+              <div className="flex items-center justify-between mb-2">
+                <label className="block text-xs font-medium text-slate-700">
+                  Clinical Diagnoses
+                </label>
+                <button
+                  type="button"
+                  onClick={handleAddDiagnosis}
+                  className="text-xs text-teal-600 hover:text-teal-700 font-medium flex items-center"
+                >
+                  <Plus className="w-3 h-3 mr-1" /> Add Diagnosis
+                </button>
+              </div>
+              <div className="space-y-2">
+                {diagnoses.map((d, idx) => (
+                  <div key={idx} className="flex items-center gap-2">
+                    <input
+                      type="text"
+                      placeholder="ICD-10 (e.g. I10)"
+                      value={d.code}
+                      onChange={(e) => {
+                        const updated = [...diagnoses];
+                        updated[idx].code = e.target.value;
+                        setDiagnoses(updated);
+                      }}
+                      className="w-24 text-xs font-mono uppercase rounded-md border-slate-300 shadow-sm p-2 border"
+                    />
+                    <input
+                      type="text"
+                      placeholder="Diagnosis Description"
+                      value={d.description}
+                      onChange={(e) => {
+                        const updated = [...diagnoses];
+                        updated[idx].description = e.target.value;
+                        setDiagnoses(updated);
+                      }}
+                      className="flex-1 text-xs rounded-md border-slate-300 shadow-sm p-2 border"
+                    />
+                    <select
+                      value={d.type}
+                      onChange={(e) => {
+                        const updated = [...diagnoses];
+                        updated[idx].type = e.target.value as any;
+                        setDiagnoses(updated);
+                      }}
+                      className="text-xs rounded-md border-slate-300 shadow-sm p-2 border"
+                    >
+                      <option value="CONFIRMED">Confirmed</option>
+                      <option value="DIFFERENTIAL">Differential</option>
+                    </select>
+                  </div>
+                ))}
+              </div>
+            </div>
+
             <div>
               <label className="block text-xs font-medium text-slate-700 mb-1">
-                Doctor Assessment & Plan
+                Treatment Instructions
               </label>
               <textarea
-                rows={3}
-                placeholder="Clinical assessment and diagnostic considerations..."
-                value={assessment}
-                onChange={(e) => setAssessment(e.target.value)}
+                rows={2}
+                placeholder="Prescribed clinical instructions, therapy, or dietary guidelines..."
+                value={treatmentInstructions}
+                onChange={(e) => setTreatmentInstructions(e.target.value)}
                 className="w-full text-xs rounded-md border-slate-300 shadow-sm p-2 border"
               />
+            </div>
+
+            <div>
+              <div className="flex items-center justify-between mb-2">
+                <label className="block text-xs font-medium text-slate-700">Prescriptions</label>
+                <button
+                  type="button"
+                  onClick={handleAddPrescription}
+                  className="text-xs text-teal-600 hover:text-teal-700 font-medium flex items-center"
+                >
+                  <Plus className="w-3 h-3 mr-1" /> Add Medication
+                </button>
+              </div>
+              <div className="space-y-2">
+                {prescriptions.map((p, idx) => (
+                  <div key={idx} className="flex items-center gap-2">
+                    <input
+                      type="text"
+                      placeholder="Medication name"
+                      value={p.medicationName}
+                      onChange={(e) => {
+                        const updated = [...prescriptions];
+                        updated[idx].medicationName = e.target.value;
+                        setPrescriptions(updated);
+                      }}
+                      className="flex-1 text-xs rounded-md border-slate-300 shadow-sm p-2 border"
+                    />
+                    <input
+                      type="text"
+                      placeholder="Dosage"
+                      value={p.dosage}
+                      onChange={(e) => {
+                        const updated = [...prescriptions];
+                        updated[idx].dosage = e.target.value;
+                        setPrescriptions(updated);
+                      }}
+                      className="w-24 text-xs rounded-md border-slate-300 shadow-sm p-2 border"
+                    />
+                    <input
+                      type="text"
+                      placeholder="Frequency"
+                      value={p.frequency}
+                      onChange={(e) => {
+                        const updated = [...prescriptions];
+                        updated[idx].frequency = e.target.value;
+                        setPrescriptions(updated);
+                      }}
+                      className="w-28 text-xs rounded-md border-slate-300 shadow-sm p-2 border"
+                    />
+                    <input
+                      type="text"
+                      placeholder="Duration"
+                      value={p.duration}
+                      onChange={(e) => {
+                        const updated = [...prescriptions];
+                        updated[idx].duration = e.target.value;
+                        setPrescriptions(updated);
+                      }}
+                      className="w-24 text-xs rounded-md border-slate-300 shadow-sm p-2 border"
+                    />
+                  </div>
+                ))}
+              </div>
             </div>
 
             <div className="flex justify-end pt-4 border-t">
@@ -594,10 +958,11 @@ export const EncounterPage: React.FC = () => {
         </form>
       )}
 
-      {/* Encounter Records List & Detail View */}
-      {activeTab === 'list' && (
+      {/* =========================================================================
+          TAB 2: ENCOUNTERS LIST & VIEWER
+          ========================================================================= */}
+      {activeTab === 'encounters' && (
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-          {/* Encounters sidebar */}
           <div className="lg:col-span-1 bg-white rounded-lg shadow-sm border border-slate-200 overflow-hidden">
             <div className="p-4 border-b bg-slate-50 flex items-center justify-between">
               <h2 className="text-sm font-semibold text-slate-800">
@@ -639,11 +1004,9 @@ export const EncounterPage: React.FC = () => {
             </div>
           </div>
 
-          {/* Encounter Detail & Addendum Pane */}
           <div className="lg:col-span-2">
             {selectedEncounter ? (
               <div className="space-y-6">
-                {/* Header Card */}
                 <div className="bg-white rounded-lg shadow-sm border border-slate-200 p-6">
                   <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b pb-4 mb-4">
                     <div>
@@ -671,210 +1034,165 @@ export const EncounterPage: React.FC = () => {
                     )}
                   </div>
 
-                  {/* Vitals Summary Grid */}
-                  <h3 className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-3">
-                    Recorded Vitals & Measurements
-                  </h3>
-                  {selectedEncounter.vitals ? (
-                    <div>
-                      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-3">
-                        <div className="p-3 bg-slate-50 rounded-lg border border-slate-100">
-                          <div className="text-[10px] text-slate-500 flex items-center">
-                            <Heart className="w-3 h-3 mr-1 text-red-500" /> Blood Pressure
-                          </div>
-                          <div className="text-sm font-bold text-slate-800 mt-1">
+                  {/* Vitals Summary */}
+                  {selectedEncounter.vitals && (
+                    <div className="mb-4">
+                      <h3 className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">
+                        Vital Signs
+                      </h3>
+                      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                        <div className="p-2.5 bg-slate-50 rounded border">
+                          <span className="text-[10px] text-slate-500">Blood Pressure</span>
+                          <div className="text-xs font-bold text-slate-800">
                             {selectedEncounter.vitals.systolicBp}/
                             {selectedEncounter.vitals.diastolicBp} mmHg
                           </div>
                         </div>
-                        <div className="p-3 bg-slate-50 rounded-lg border border-slate-100">
-                          <div className="text-[10px] text-slate-500 flex items-center">
-                            <Activity className="w-3 h-3 mr-1 text-teal-500" /> Pulse Rate
-                          </div>
-                          <div className="text-sm font-bold text-slate-800 mt-1">
+                        <div className="p-2.5 bg-slate-50 rounded border">
+                          <span className="text-[10px] text-slate-500">Pulse</span>
+                          <div className="text-xs font-bold text-slate-800">
                             {selectedEncounter.vitals.pulseRate} bpm
                           </div>
                         </div>
-                        <div className="p-3 bg-slate-50 rounded-lg border border-slate-100">
-                          <div className="text-[10px] text-slate-500 flex items-center">
-                            <Thermometer className="w-3 h-3 mr-1 text-amber-500" /> Temperature
-                          </div>
-                          <div className="text-sm font-bold text-slate-800 mt-1">
-                            {selectedEncounter.vitals.temperatureF} °F
+                        <div className="p-2.5 bg-slate-50 rounded border">
+                          <span className="text-[10px] text-slate-500">Temp / SpO2</span>
+                          <div className="text-xs font-bold text-slate-800">
+                            {selectedEncounter.vitals.temperatureF}°F •{' '}
+                            {selectedEncounter.vitals.oxygenSaturation}%
                           </div>
                         </div>
-                        <div className="p-3 bg-slate-50 rounded-lg border border-slate-100">
-                          <div className="text-[10px] text-slate-500 flex items-center">
-                            <Wind className="w-3 h-3 mr-1 text-blue-500" /> SpO2 Oxygen
-                          </div>
-                          <div className="text-sm font-bold text-slate-800 mt-1">
-                            {selectedEncounter.vitals.oxygenSaturation} %
+                        <div className="p-2.5 bg-slate-50 rounded border">
+                          <span className="text-[10px] text-slate-500">BMI</span>
+                          <div className="text-xs font-bold text-slate-800">
+                            {selectedEncounter.vitals.bmi} ({selectedEncounter.vitals.bmiCategory})
                           </div>
                         </div>
                       </div>
-
-                      {/* BMI & Alerts */}
-                      <div className="flex flex-wrap items-center justify-between p-3 bg-slate-50 rounded-lg border border-slate-200">
-                        <div className="flex items-center space-x-3">
-                          <span className="text-xs text-slate-600">
-                            Height: <strong>{selectedEncounter.vitals.heightCm} cm</strong> •
-                            Weight: <strong>{selectedEncounter.vitals.weightKg} kg</strong>
-                          </span>
-                          <span
-                            className={`text-xs px-2 py-0.5 rounded font-semibold ${getBmiBadgeColor(
-                              selectedEncounter.vitals.bmiCategory,
-                            )}`}
-                          >
-                            BMI: {selectedEncounter.vitals.bmi} (
-                            {selectedEncounter.vitals.bmiCategory})
-                          </span>
-                        </div>
-
-                        {selectedEncounter.vitals.abnormalFlags &&
-                          selectedEncounter.vitals.abnormalFlags.length > 0 && (
-                            <div className="flex flex-wrap gap-1 mt-2 sm:mt-0">
-                              {selectedEncounter.vitals.abnormalFlags.map((flag: string) => (
-                                <span
-                                  key={flag}
-                                  className="px-2 py-0.5 text-[10px] font-bold rounded bg-red-100 text-red-800"
-                                >
-                                  {flag.replace(/_/g, ' ')}
-                                </span>
-                              ))}
-                            </div>
-                          )}
-                      </div>
-                    </div>
-                  ) : (
-                    <div className="text-xs text-slate-400 italic">
-                      No vitals recorded for this encounter.
                     </div>
                   )}
 
-                  {/* Presentation details */}
-                  <div className="mt-6 space-y-4">
-                    <div>
-                      <h4 className="text-xs font-semibold text-slate-700">Symptoms</h4>
-                      {selectedEncounter.symptoms && selectedEncounter.symptoms.length > 0 ? (
-                        <div className="flex flex-wrap gap-2 mt-1">
-                          {selectedEncounter.symptoms.map((s: any, idx: number) => (
+                  {/* Diagnoses Section */}
+                  {selectedEncounter.diagnoses && selectedEncounter.diagnoses.length > 0 && (
+                    <div className="mb-4">
+                      <h3 className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">
+                        Diagnoses (ICD-10)
+                      </h3>
+                      <div className="space-y-1.5">
+                        {selectedEncounter.diagnoses.map((d: any, idx: number) => (
+                          <div
+                            key={idx}
+                            className="flex items-center justify-between p-2 rounded bg-slate-50 border text-xs"
+                          >
+                            <div className="flex items-center space-x-2">
+                              <span className="font-mono font-bold text-teal-700 bg-teal-50 px-1.5 py-0.5 rounded">
+                                {d.code}
+                              </span>
+                              <span className="text-slate-800 font-medium">{d.description}</span>
+                            </div>
                             <span
-                              key={idx}
-                              className="px-2.5 py-1 text-xs rounded-md bg-slate-100 border text-slate-800"
+                              className={`text-[10px] font-semibold px-2 py-0.5 rounded ${
+                                d.type === 'CONFIRMED'
+                                  ? 'bg-green-100 text-green-800'
+                                  : 'bg-amber-100 text-amber-800'
+                              }`}
                             >
-                              {s.name}{' '}
-                              <span className="text-[10px] text-slate-500">({s.severity})</span>
+                              {d.type}
                             </span>
-                          ))}
-                        </div>
-                      ) : (
-                        <p className="text-xs text-slate-400 italic mt-0.5">None listed</p>
-                      )}
+                          </div>
+                        ))}
+                      </div>
                     </div>
+                  )}
 
-                    {selectedEncounter.historyOfPresentIllness && (
-                      <div>
-                        <h4 className="text-xs font-semibold text-slate-700">
-                          History of Present Illness (HPI)
-                        </h4>
-                        <p className="text-xs text-slate-700 bg-slate-50 p-2.5 rounded border mt-1">
-                          {selectedEncounter.historyOfPresentIllness}
-                        </p>
-                      </div>
-                    )}
-
-                    {selectedEncounter.assessment && (
-                      <div>
-                        <h4 className="text-xs font-semibold text-slate-700">
-                          Clinical Assessment
-                        </h4>
-                        <p className="text-xs text-slate-700 bg-slate-50 p-2.5 rounded border mt-1">
-                          {selectedEncounter.assessment}
-                        </p>
-                      </div>
-                    )}
-                  </div>
+                  {/* Treatment Plan Section */}
+                  {selectedEncounter.treatmentPlan && (
+                    <div className="mb-4">
+                      <h3 className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">
+                        Treatment Plan & Prescriptions
+                      </h3>
+                      <p className="text-xs text-slate-700 bg-slate-50 p-2.5 rounded border mb-2">
+                        {selectedEncounter.treatmentPlan.instructions}
+                      </p>
+                      {selectedEncounter.treatmentPlan.prescriptions &&
+                        selectedEncounter.treatmentPlan.prescriptions.length > 0 && (
+                          <div className="space-y-1">
+                            {selectedEncounter.treatmentPlan.prescriptions.map(
+                              (p: any, idx: number) => (
+                                <div
+                                  key={idx}
+                                  className="flex items-center justify-between p-2 rounded bg-blue-50/50 border border-blue-100 text-xs"
+                                >
+                                  <span className="font-semibold text-slate-800 flex items-center">
+                                    <Pill className="w-3.5 h-3.5 text-blue-600 mr-1.5" />
+                                    {p.medicationName} ({p.dosage})
+                                  </span>
+                                  <span className="text-[11px] text-slate-600">
+                                    {p.frequency} • {p.duration}
+                                  </span>
+                                </div>
+                              ),
+                            )}
+                          </div>
+                        )}
+                    </div>
+                  )}
                 </div>
 
-                {/* Amendments & Addenda Card */}
+                {/* Addenda Card */}
                 <div className="bg-white rounded-lg shadow-sm border border-slate-200 p-6 space-y-4">
                   <div className="flex items-center justify-between border-b pb-3">
                     <h3 className="text-sm font-bold text-slate-900 flex items-center">
                       <ShieldAlert className="w-4 h-4 text-indigo-600 mr-2" />
-                      Addenda & Amendments History ({selectedEncounter.addenda?.length || 0})
+                      Addenda & Amendments ({selectedEncounter.addenda?.length || 0})
                     </h3>
-                    <span className="text-[11px] text-slate-500">
-                      Append-Only Legal Audit Trail
-                    </span>
+                    <span className="text-[11px] text-slate-500">Append-Only Legal Trail</span>
                   </div>
 
-                  {selectedEncounter.addenda && selectedEncounter.addenda.length > 0 ? (
-                    <div className="space-y-3">
-                      {selectedEncounter.addenda.map((ad: any, idx: number) => (
-                        <div
-                          key={idx}
-                          className="p-3 bg-indigo-50/50 border border-indigo-100 rounded-lg text-xs"
-                        >
-                          <div className="flex items-center justify-between text-indigo-900 font-semibold mb-1">
-                            <span>Reason: {ad.amendmentReason}</span>
-                            <span className="text-[10px] text-slate-500 font-normal">
-                              {new Date(ad.createdAt).toLocaleString()}
-                            </span>
-                          </div>
-                          <p className="text-slate-700 mt-1">{ad.notes}</p>
-                          <div className="text-[10px] text-slate-500 mt-2">
-                            Author: {ad.authorName} ({ad.authorRole})
-                          </div>
-                        </div>
-                      ))}
+                  {selectedEncounter.addenda?.map((ad: any, idx: number) => (
+                    <div
+                      key={idx}
+                      className="p-3 bg-indigo-50/50 border border-indigo-100 rounded-lg text-xs"
+                    >
+                      <div className="flex items-center justify-between text-indigo-900 font-semibold mb-1">
+                        <span>Reason: {ad.amendmentReason}</span>
+                        <span className="text-[10px] text-slate-500">
+                          {new Date(ad.createdAt).toLocaleString()}
+                        </span>
+                      </div>
+                      <p className="text-slate-700">{ad.notes}</p>
                     </div>
-                  ) : (
-                    <p className="text-xs text-slate-400 italic">
-                      No addenda recorded for this encounter.
-                    </p>
-                  )}
+                  ))}
 
-                  {/* Add Addendum Form (Active for SIGNED or AMENDED records) */}
                   {(selectedEncounter.status === 'SIGNED' ||
                     selectedEncounter.status === 'AMENDED') && (
-                    <form onSubmit={handleAddAddendum} className="pt-4 border-t space-y-3">
-                      <h4 className="text-xs font-bold text-slate-700 uppercase tracking-wide">
+                    <form onSubmit={handleAddAddendum} className="pt-3 border-t space-y-2">
+                      <h4 className="text-xs font-bold text-slate-700 uppercase">
                         Append Legal Addendum
                       </h4>
-                      <div>
-                        <label className="block text-xs font-medium text-slate-700 mb-1">
-                          Reason for Amendment *
-                        </label>
-                        <input
-                          type="text"
-                          placeholder="e.g. Lab results follow-up or updated differential diagnosis"
-                          value={amendmentReason}
-                          onChange={(e) => setAmendmentReason(e.target.value)}
-                          className="w-full text-xs rounded-md border-slate-300 shadow-sm p-2 border"
-                          required
-                        />
-                      </div>
-                      <div>
-                        <label className="block text-xs font-medium text-slate-700 mb-1">
-                          Addendum Notes *
-                        </label>
-                        <textarea
-                          rows={2}
-                          placeholder="Enter amendment details..."
-                          value={addendumNotes}
-                          onChange={(e) => setAddendumNotes(e.target.value)}
-                          className="w-full text-xs rounded-md border-slate-300 shadow-sm p-2 border"
-                          required
-                        />
-                      </div>
+                      <input
+                        type="text"
+                        placeholder="Amendment reason..."
+                        value={amendmentReason}
+                        onChange={(e) => setAmendmentReason(e.target.value)}
+                        className="w-full text-xs rounded-md border-slate-300 p-2 border"
+                        required
+                      />
+                      <textarea
+                        rows={2}
+                        placeholder="Addendum notes..."
+                        value={addendumNotes}
+                        onChange={(e) => setAddendumNotes(e.target.value)}
+                        className="w-full text-xs rounded-md border-slate-300 p-2 border"
+                        required
+                      />
                       <div className="flex justify-end">
                         <button
                           type="submit"
                           disabled={isSubmittingAddendum}
-                          className="px-4 py-2 bg-indigo-600 text-white rounded-lg text-xs font-medium hover:bg-indigo-700 shadow-sm flex items-center disabled:opacity-50"
+                          className="px-3 py-1.5 bg-indigo-600 text-white rounded text-xs font-medium flex items-center"
                         >
-                          <Send className="w-3 h-3 mr-1.5" />
-                          {isSubmittingAddendum ? 'Appending...' : 'Append Addendum'}
+                          <Send className="w-3 h-3 mr-1" />
+                          Append Addendum
                         </button>
                       </div>
                     </form>
@@ -882,11 +1200,553 @@ export const EncounterPage: React.FC = () => {
                 </div>
               </div>
             ) : (
-              <div className="bg-white rounded-lg shadow-sm border border-slate-200 p-12 text-center text-slate-400 text-xs">
-                Select an encounter from the left panel to review details, vitals, and addenda.
+              <div className="p-12 bg-white rounded-lg border text-center text-xs text-slate-400">
+                Select an encounter from the left to inspect records.
               </div>
             )}
           </div>
+        </div>
+      )}
+
+      {/* =========================================================================
+          TAB 3: ALLERGIES & ADVERSE DRUG REACTIONS
+          ========================================================================= */}
+      {activeTab === 'allergies' && (
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+          <div className="bg-white rounded-lg shadow-sm border border-slate-200 p-6 space-y-4">
+            <h2 className="text-sm font-bold text-slate-900 border-b pb-2 flex items-center">
+              <AlertCircle className="w-4 h-4 text-red-600 mr-2" /> Record Patient Allergy
+            </h2>
+            <form onSubmit={handleCreateAllergy} className="space-y-3">
+              <div>
+                <label className="block text-xs font-medium text-slate-700 mb-1">
+                  Patient Profile ID
+                </label>
+                <input
+                  type="text"
+                  value={allergyPatientId}
+                  onChange={(e) => setAllergyPatientId(e.target.value)}
+                  className="w-full text-xs rounded border p-2"
+                  placeholder="Patient ID..."
+                  required
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-slate-700 mb-1">
+                  Allergen Name
+                </label>
+                <input
+                  type="text"
+                  value={allergen}
+                  onChange={(e) => setAllergen(e.target.value)}
+                  className="w-full text-xs rounded border p-2"
+                  placeholder="e.g. Penicillin, Peanuts, Latex"
+                  required
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-slate-700 mb-1">
+                  Reaction Description
+                </label>
+                <input
+                  type="text"
+                  value={allergyReaction}
+                  onChange={(e) => setAllergyReaction(e.target.value)}
+                  className="w-full text-xs rounded border p-2"
+                  placeholder="e.g. Anaphylaxis, Rash, Angioedema"
+                  required
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-slate-700 mb-1">
+                  Clinical Severity
+                </label>
+                <select
+                  value={allergySeverity}
+                  onChange={(e) => setAllergySeverity(e.target.value as any)}
+                  className="w-full text-xs rounded border p-2"
+                >
+                  <option value="MILD">Mild</option>
+                  <option value="MODERATE">Moderate</option>
+                  <option value="SEVERE">Severe</option>
+                  <option value="LIFE_THREATENING">Life-Threatening (Critical)</option>
+                </select>
+              </div>
+              <div className="flex items-center space-x-2 pt-1">
+                <input
+                  type="checkbox"
+                  id="adr"
+                  checked={isAdverseDrugReaction}
+                  onChange={(e) => setIsAdverseDrugReaction(e.target.checked)}
+                  className="rounded text-teal-600"
+                />
+                <label htmlFor="adr" className="text-xs text-slate-700 font-medium">
+                  Adverse Drug Reaction (ADR)
+                </label>
+              </div>
+              <button
+                type="submit"
+                disabled={loading}
+                className="w-full py-2 bg-red-600 hover:bg-red-700 text-white rounded text-xs font-semibold shadow-sm"
+              >
+                Record Allergy
+              </button>
+            </form>
+          </div>
+
+          <div className="lg:col-span-2 bg-white rounded-lg shadow-sm border border-slate-200 overflow-hidden">
+            <div className="p-4 border-b bg-slate-50 flex items-center justify-between">
+              <h2 className="text-sm font-semibold text-slate-800">
+                Patient Allergy & ADR Registry ({allergies.length})
+              </h2>
+            </div>
+            <div className="divide-y max-h-[500px] overflow-y-auto">
+              {allergies.length === 0 ? (
+                <div className="p-6 text-center text-xs text-slate-400">No allergies recorded.</div>
+              ) : (
+                allergies.map((a) => (
+                  <div
+                    key={a._id}
+                    className={`p-4 flex items-center justify-between ${
+                      a.severity === 'LIFE_THREATENING'
+                        ? 'bg-red-50/70 border-l-4 border-red-600'
+                        : ''
+                    }`}
+                  >
+                    <div>
+                      <div className="flex items-center space-x-2">
+                        <span className="text-xs font-bold text-slate-900">{a.allergen}</span>
+                        {a.isAdverseDrugReaction && (
+                          <span className="text-[10px] bg-purple-100 text-purple-800 font-semibold px-2 py-0.5 rounded">
+                            DRUG ALLERGY
+                          </span>
+                        )}
+                        <span
+                          className={`text-[10px] font-bold px-2 py-0.5 rounded ${
+                            a.severity === 'LIFE_THREATENING'
+                              ? 'bg-red-600 text-white animate-pulse'
+                              : a.severity === 'SEVERE'
+                                ? 'bg-orange-100 text-orange-800'
+                                : 'bg-slate-100 text-slate-800'
+                          }`}
+                        >
+                          {a.severity.replace(/_/g, ' ')}
+                        </span>
+                      </div>
+                      <div className="text-xs text-slate-600 mt-1">Reaction: {a.reaction}</div>
+                      <div className="text-[10px] text-slate-400 mt-0.5">
+                        Patient ID: {a.patientId}
+                      </div>
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* =========================================================================
+          TAB 4: VACCINATIONS & IMMUNIZATION TRACKER
+          ========================================================================= */}
+      {activeTab === 'vaccinations' && (
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+          <div className="bg-white rounded-lg shadow-sm border border-slate-200 p-6 space-y-4">
+            <h2 className="text-sm font-bold text-slate-900 border-b pb-2 flex items-center">
+              <Syringe className="w-4 h-4 text-teal-600 mr-2" /> Record Immunization
+            </h2>
+            <form onSubmit={handleCreateVaccination} className="space-y-3">
+              <div>
+                <label className="block text-xs font-medium text-slate-700 mb-1">
+                  Patient Profile ID
+                </label>
+                <input
+                  type="text"
+                  value={vaxPatientId}
+                  onChange={(e) => setVaxPatientId(e.target.value)}
+                  className="w-full text-xs rounded border p-2"
+                  placeholder="Patient ID..."
+                  required
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-slate-700 mb-1">
+                  Vaccine Name
+                </label>
+                <input
+                  type="text"
+                  value={vaccineName}
+                  onChange={(e) => setVaccineName(e.target.value)}
+                  className="w-full text-xs rounded border p-2"
+                  placeholder="e.g. Hepatitis B, MMR, COVID-19 mRNA"
+                  required
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-slate-700 mb-1">
+                  Batch / Lot Number
+                </label>
+                <input
+                  type="text"
+                  value={vaxBatch}
+                  onChange={(e) => setVaxBatch(e.target.value)}
+                  className="w-full text-xs rounded border p-2"
+                  placeholder="Batch #..."
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-slate-700 mb-1">
+                  Administered Date
+                </label>
+                <input
+                  type="date"
+                  value={vaxDate}
+                  onChange={(e) => setVaxDate(e.target.value)}
+                  className="w-full text-xs rounded border p-2"
+                  required
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-slate-700 mb-1">
+                  Next Due Date (Optional)
+                </label>
+                <input
+                  type="date"
+                  value={vaxNextDue}
+                  onChange={(e) => setVaxNextDue(e.target.value)}
+                  className="w-full text-xs rounded border p-2"
+                />
+              </div>
+              <button
+                type="submit"
+                disabled={loading}
+                className="w-full py-2 bg-teal-600 hover:bg-teal-700 text-white rounded text-xs font-semibold shadow-sm"
+              >
+                Record Immunization
+              </button>
+            </form>
+          </div>
+
+          <div className="lg:col-span-2 bg-white rounded-lg shadow-sm border border-slate-200 overflow-hidden">
+            <div className="p-4 border-b bg-slate-50 flex items-center justify-between">
+              <h2 className="text-sm font-semibold text-slate-800">
+                Immunization Records ({vaccinations.length})
+              </h2>
+            </div>
+            <div className="divide-y max-h-[500px] overflow-y-auto">
+              {vaccinations.length === 0 ? (
+                <div className="p-6 text-center text-xs text-slate-400">
+                  No vaccinations recorded.
+                </div>
+              ) : (
+                vaccinations.map((v) => (
+                  <div key={v._id} className="p-4 flex items-center justify-between">
+                    <div>
+                      <div className="flex items-center space-x-2">
+                        <span className="text-xs font-bold text-slate-900">{v.vaccineName}</span>
+                        {v.batchNumber && (
+                          <span className="text-[10px] bg-slate-100 text-slate-600 px-1.5 py-0.5 rounded font-mono">
+                            Lot: {v.batchNumber}
+                          </span>
+                        )}
+                      </div>
+                      <div className="text-[11px] text-slate-500 mt-0.5">
+                        Administered: {new Date(v.administeredDate).toLocaleDateString()}
+                      </div>
+                      {v.nextDueDate && (
+                        <div className="text-[11px] text-teal-700 font-medium mt-0.5">
+                          Next Booster Due: {new Date(v.nextDueDate).toLocaleDateString()}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* =========================================================================
+          TAB 5: FAMILY MEDICAL HISTORY
+          ========================================================================= */}
+      {activeTab === 'familyHistory' && (
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+          <div className="bg-white rounded-lg shadow-sm border border-slate-200 p-6 space-y-4">
+            <h2 className="text-sm font-bold text-slate-900 border-b pb-2 flex items-center">
+              <Users className="w-4 h-4 text-teal-600 mr-2" /> Add Family Medical History
+            </h2>
+            <form onSubmit={handleCreateFamilyHistory} className="space-y-3">
+              <div>
+                <label className="block text-xs font-medium text-slate-700 mb-1">
+                  Patient Profile ID
+                </label>
+                <input
+                  type="text"
+                  value={famPatientId}
+                  onChange={(e) => setFamPatientId(e.target.value)}
+                  className="w-full text-xs rounded border p-2"
+                  placeholder="Patient ID..."
+                  required
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-slate-700 mb-1">
+                  Relationship
+                </label>
+                <select
+                  value={relationship}
+                  onChange={(e) => setRelationship(e.target.value)}
+                  className="w-full text-xs rounded border p-2"
+                >
+                  <option value="FATHER">Father</option>
+                  <option value="MOTHER">Mother</option>
+                  <option value="BROTHER">Brother</option>
+                  <option value="SISTER">Sister</option>
+                  <option value="PATERNAL_GRANDFATHER">Paternal Grandfather</option>
+                  <option value="MATERNAL_GRANDMOTHER">Maternal Grandmother</option>
+                </select>
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-slate-700 mb-1">
+                  Medical Condition
+                </label>
+                <input
+                  type="text"
+                  value={condition}
+                  onChange={(e) => setCondition(e.target.value)}
+                  className="w-full text-xs rounded border p-2"
+                  placeholder="e.g. Type 2 Diabetes, Coronary Artery Disease"
+                  required
+                />
+              </div>
+              <div className="space-y-1.5 pt-1">
+                <span className="text-xs font-semibold text-slate-700">Hereditary Risk Flags:</span>
+                <div className="grid grid-cols-2 gap-1 text-xs text-slate-600">
+                  <label className="flex items-center space-x-1">
+                    <input
+                      type="checkbox"
+                      checked={hasDiabetes}
+                      onChange={(e) => setHasDiabetes(e.target.checked)}
+                    />
+                    <span>Diabetes</span>
+                  </label>
+                  <label className="flex items-center space-x-1">
+                    <input
+                      type="checkbox"
+                      checked={hasHypertension}
+                      onChange={(e) => setHasHypertension(e.target.checked)}
+                    />
+                    <span>Hypertension</span>
+                  </label>
+                  <label className="flex items-center space-x-1">
+                    <input
+                      type="checkbox"
+                      checked={hasCancer}
+                      onChange={(e) => setHasCancer(e.target.checked)}
+                    />
+                    <span>Cancer</span>
+                  </label>
+                  <label className="flex items-center space-x-1">
+                    <input
+                      type="checkbox"
+                      checked={hasCardiacDisease}
+                      onChange={(e) => setHasCardiacDisease(e.target.checked)}
+                    />
+                    <span>Cardiac Disease</span>
+                  </label>
+                </div>
+              </div>
+              <button
+                type="submit"
+                disabled={loading}
+                className="w-full py-2 bg-teal-600 hover:bg-teal-700 text-white rounded text-xs font-semibold shadow-sm"
+              >
+                Save Family Record
+              </button>
+            </form>
+          </div>
+
+          <div className="lg:col-span-2 bg-white rounded-lg shadow-sm border border-slate-200 overflow-hidden">
+            <div className="p-4 border-b bg-slate-50 flex items-center justify-between">
+              <h2 className="text-sm font-semibold text-slate-800">
+                Hereditary Family History ({familyHistories.length})
+              </h2>
+            </div>
+            <div className="divide-y max-h-[500px] overflow-y-auto">
+              {familyHistories.length === 0 ? (
+                <div className="p-6 text-center text-xs text-slate-400">
+                  No family records found.
+                </div>
+              ) : (
+                familyHistories.map((f) => (
+                  <div key={f._id} className="p-4 flex items-center justify-between">
+                    <div>
+                      <div className="flex items-center space-x-2">
+                        <span className="text-xs font-bold text-slate-900">{f.condition}</span>
+                        <span className="text-[10px] bg-slate-100 text-slate-700 px-2 py-0.5 rounded font-semibold">
+                          {f.relationship}
+                        </span>
+                      </div>
+                      <div className="flex items-center space-x-2 mt-1">
+                        {f.hasDiabetes && (
+                          <span className="text-[9px] bg-amber-100 text-amber-800 px-1.5 py-0.2 rounded font-semibold">
+                            Diabetes
+                          </span>
+                        )}
+                        {f.hasHypertension && (
+                          <span className="text-[9px] bg-red-100 text-red-800 px-1.5 py-0.2 rounded font-semibold">
+                            Hypertension
+                          </span>
+                        )}
+                        {f.hasCardiacDisease && (
+                          <span className="text-[9px] bg-purple-100 text-purple-800 px-1.5 py-0.2 rounded font-semibold">
+                            Cardiac
+                          </span>
+                        )}
+                        {f.hasCancer && (
+                          <span className="text-[9px] bg-pink-100 text-pink-800 px-1.5 py-0.2 rounded font-semibold">
+                            Cancer
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* =========================================================================
+          TAB 6: LONGITUDINAL PATIENT TIMELINE
+          ========================================================================= */}
+      {activeTab === 'timeline' && (
+        <div className="space-y-6">
+          <div className="bg-white rounded-lg shadow-sm border border-slate-200 p-6 flex items-center gap-4">
+            <input
+              type="text"
+              placeholder="Enter Patient Profile ID..."
+              value={filterPatientId}
+              onChange={(e) => setFilterPatientId(e.target.value)}
+              className="flex-1 text-xs rounded border p-2"
+            />
+            <button
+              onClick={handleLoadTimeline}
+              disabled={loading}
+              className="px-4 py-2 bg-teal-600 text-white rounded text-xs font-semibold shadow-sm hover:bg-teal-700"
+            >
+              {loading ? 'Aggregating Timeline...' : 'Load Patient EMR Timeline'}
+            </button>
+          </div>
+
+          {timelineData && (
+            <div className="space-y-6">
+              {/* Summary Dashboard */}
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+                <div className="p-4 bg-white rounded-lg border shadow-sm">
+                  <div className="text-[11px] text-slate-500 font-semibold">Total Encounters</div>
+                  <div className="text-2xl font-bold text-slate-900 mt-1">
+                    {timelineData.summary.totalEncounters}
+                  </div>
+                </div>
+                <div className="p-4 bg-white rounded-lg border shadow-sm">
+                  <div className="text-[11px] text-slate-500 font-semibold">Active Diagnoses</div>
+                  <div className="text-2xl font-bold text-teal-600 mt-1">
+                    {timelineData.summary.activeDiagnosesCount}
+                  </div>
+                </div>
+                <div className="p-4 bg-white rounded-lg border shadow-sm">
+                  <div className="text-[11px] text-slate-500 font-semibold">Recorded Allergies</div>
+                  <div className="text-2xl font-bold text-red-600 mt-1">
+                    {timelineData.summary.activeAllergiesCount}
+                  </div>
+                </div>
+                <div className="p-4 bg-white rounded-lg border shadow-sm">
+                  <div className="text-[11px] text-slate-500 font-semibold">
+                    Life-Threatening Alerts
+                  </div>
+                  <div className="text-2xl font-bold text-purple-600 mt-1">
+                    {timelineData.summary.hasLifeThreateningAllergies ? 'YES (CRITICAL)' : 'NONE'}
+                  </div>
+                </div>
+              </div>
+
+              {/* Hereditary Risk Banner */}
+              <div className="bg-amber-50 border border-amber-200 rounded-lg p-4 flex items-center justify-between">
+                <div className="flex items-center space-x-2">
+                  <AlertTriangle className="w-5 h-5 text-amber-600" />
+                  <div>
+                    <h4 className="text-xs font-bold text-amber-900">
+                      Hereditary Disease Risk Assessment
+                    </h4>
+                    <p className="text-[11px] text-amber-700">
+                      Based on recorded immediate family medical history.
+                    </p>
+                  </div>
+                </div>
+                <div className="flex flex-wrap gap-2 text-xs">
+                  {timelineData.summary.hereditaryRisks.hasDiabetesRisk && (
+                    <span className="px-2 py-0.5 rounded bg-amber-200 text-amber-900 font-semibold">
+                      Elevated Diabetes Risk
+                    </span>
+                  )}
+                  {timelineData.summary.hereditaryRisks.hasCardiacRisk && (
+                    <span className="px-2 py-0.5 rounded bg-red-200 text-red-900 font-semibold">
+                      Elevated Cardiac Risk
+                    </span>
+                  )}
+                  {timelineData.summary.hereditaryRisks.hasHypertensionRisk && (
+                    <span className="px-2 py-0.5 rounded bg-orange-200 text-orange-900 font-semibold">
+                      Elevated Hypertension Risk
+                    </span>
+                  )}
+                  {timelineData.summary.hereditaryRisks.hasCancerRisk && (
+                    <span className="px-2 py-0.5 rounded bg-pink-200 text-pink-900 font-semibold">
+                      Elevated Cancer Risk
+                    </span>
+                  )}
+                </div>
+              </div>
+
+              {/* Chronological Encounter Timeline */}
+              <div className="bg-white rounded-lg border shadow-sm p-6">
+                <h3 className="text-sm font-bold text-slate-900 border-b pb-3 mb-4 flex items-center">
+                  <History className="w-4 h-4 text-teal-600 mr-2" /> Chronological Clinical Events
+                </h3>
+                <div className="space-y-4">
+                  {timelineData.encounters.map((enc: any) => (
+                    <div
+                      key={enc._id}
+                      className="p-4 rounded-lg bg-slate-50 border border-slate-200 flex flex-col md:flex-row md:items-center justify-between gap-2"
+                    >
+                      <div>
+                        <div className="flex items-center space-x-2">
+                          <span className="text-xs font-bold text-slate-900">
+                            {enc.chiefComplaint}
+                          </span>
+                          {getStatusBadge(enc.status)}
+                        </div>
+                        <div className="text-[11px] text-slate-500 mt-1">
+                          Date: {new Date(enc.createdAt).toLocaleString()} • Attending Doctor ID:{' '}
+                          {enc.doctorId}
+                        </div>
+                      </div>
+                      <div className="text-xs text-slate-600">
+                        {enc.vitals && (
+                          <span>
+                            BP: {enc.vitals.systolicBp}/{enc.vitals.diastolicBp} | Pulse:{' '}
+                            {enc.vitals.pulseRate} | BMI: {enc.vitals.bmi}
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          )}
         </div>
       )}
     </div>
