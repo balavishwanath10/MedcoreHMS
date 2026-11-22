@@ -104,7 +104,9 @@ describe('Day 12: EMR Diagnoses, Treatment, Allergies & Clinical History Integra
       expect(res.body.data.diagnoses[0].code).toBe('I10');
       expect(res.body.data.diagnoses[0].type).toBe('CONFIRMED');
       expect(res.body.data.treatmentPlan.prescriptions).toHaveLength(1);
-      expect(res.body.data.treatmentPlan.prescriptions[0].medicationName).toBe('Amlodipine Besylate');
+      expect(res.body.data.treatmentPlan.prescriptions[0].medicationName).toBe(
+        'Amlodipine Besylate',
+      );
     });
 
     it('should reject invalid diagnosis data missing required ICD-10 code', async () => {

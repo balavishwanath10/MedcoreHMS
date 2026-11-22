@@ -58,26 +58,30 @@ All days were committed with their exact mandated commit messages and pushed cle
 ### Day 9: Appointment Booking Engine and Concurrency Conflict Prevention
 - **Endpoints**: `POST /api/appointments`, `GET /api/appointments`, `GET /api/appointments/:id`.
 - **Concurrency & Double-Booking Strategy**:
-  - Implemented database-enforced compound unique partial indexes:
-    1. `{ hospitalId: 1, doctorId: 1, startTime: 1 }` with `{ isDeleted: false, status: { $nin: ['CANCELLED'] } }`
-    2. `{ hospitalId: 1, patientId: 1, startTime: 1 }` with `{ isDeleted: false, status: { $nin: ['CANCELLED'] } }`
-  - Atomic database transactions with conditional conflict handling. If concurrent requests race for the exact same slot, MongoDB code 11000 duplicate key error is trapped and returned as `409 CONFLICT` with error code `DOCTOR_SLOT_UNAVAILABLE` or `PATIENT_APPOINTMENT_CONFLICT`.
+  - Implemented database-enforced compound unique partial indexes using valid MongoDB equality expressions:
+    1. `{ hospitalId: 1, doctorId: 1, startTime: 1 }` with `{ isDeleted: false, isCancelled: false }`
+    2. `{ hospitalId: 1, patientId: 1, startTime: 1 }` with `{ isDeleted: false, isCancelled: false }`
+  - Atomic database transactions with document version serialization (`$inc: { bookingLockVersion: 1 }` on `DoctorProfile` and `PatientProfile`). Under WiredTiger concurrency control, concurrent transactions targeting the same doctor or patient are serialized, allowing the interval overlap query (`startTime < reqEnd && endTime > reqStart`) to reliably catch partial overlaps and phantom reads.
+  - Comprehensive patient conflict detection querying across all patient profiles linked to the patient's authenticated user account.
+  - Trapping of duplicate key code 11000 with translation to structured 409 error envelopes.
 - **Documentation**: [APPOINTMENT_CONCURRENCY.md](file:///c:/Users/91949/Desktop/MedcoreHMS/docs/architecture/APPOINTMENT_CONCURRENCY.md).
 
 ### Day 10: Appointment Lifecycle, Queue Management and Status Workflows
 - **Endpoints**: `PATCH /api/appointments/:id/status`.
 - **State Transition Matrix**:
-  - Valid transitions: `SCHEDULED` -> `CONFIRMED` -> `CHECKED_IN` -> `IN_CONSULTATION` -> `COMPLETED`.
-  - Terminal statuses: `CANCELLED`, `RESCHEDULED`, `NO_SHOW`, `COMPLETED`. Illegal skips or regressions reject with `400 BAD_REQUEST`.
+  - Valid transitions strictly aligned with PRD v1.0: `PENDING` -> `CONFIRMED` -> `IN_PROGRESS` -> `COMPLETED`.
+  - Terminal statuses: `CANCELLED`, `NO_SHOW`. Illegal skips or regressions reject with `400 BAD_REQUEST` (`INVALID_STATUS_TRANSITION`).
   - Mandatory cancellation reasons.
-- **Role Permissions**: `CHECKED_IN` restricted to clinical/reception staff; `COMPLETED` restricted to attending doctor or hospital admin; `PATIENT` can only cancel their own uncommenced appointments.
+- **Role Permissions**: `CONFIRMED` restricted to receptionist/clinical staff; `IN_PROGRESS` and `COMPLETED` restricted to clinical staff/attending doctor; `PATIENT` can only cancel their own uncommenced appointments.
 - **Emergency Bookings**: Emergency appointments bypass doctor weekly availability lookups and slot availability checks to allow immediate clinical intake.
-- **Notifications**: Automated dispatch triggers for 24-hour and 2-hour pre-appointment reminders.
+- **Notifications & Reminders**: Automated reminder dispatch evaluation for 24-hour and 1-hour pre-appointment reminders via Email and SMS channels with per-channel failure isolation and accurate delivery status tracking (`DEV_MOCK_UNCONFIGURED` / `TWILIO_MOCK_UNCONFIGURED`).
 
 ### Day 11: EMR Part 1 — Encounters, Vitals and Clinical Presentation
 - **Endpoints**: `POST /api/encounters`, `GET /api/encounters`, `GET /api/encounters/:id`, `PUT /api/encounters/:id`, `POST /api/encounters/:id/sign`, `POST /api/encounters/:id/addendum`, `POST /api/encounters/calculate-vitals`.
 - **Vitals & BMI Engine**: Standard formula $\text{BMI} = \text{weightKg} / (\text{heightM})^2$ with categories (`UNDERWEIGHT`, `NORMAL`, `OVERWEIGHT`, `OBESE`) and abnormal physiological flags (`HIGH_BLOOD_PRESSURE`, `LOW_BLOOD_PRESSURE`, `TACHYCARDIA`, `BRADYCARDIA`, `FEVER`, `HYPOTHERMIA`, `TACHYPNEA`, `BRADYPNEA`, `HYPOXIA`).
-- **EMR Immutability Architecture**: Once an encounter is finalized and signed by a physician (`POST .../sign`), it is permanently locked against direct updates (`400 ENCOUNTER_IMMUTABLE`). Subsequent corrections are recorded as append-only addenda with author attribution and amendment reasons.
+- **Append-Only Immutability Architecture**:
+  - Open encounter revisions: Updates to an `OPEN` encounter record a revision in `revisions` capturing the previous snapshot, changed fields, author ID, author role, author name, timestamp, and reason for correction, ensuring no clinical data is silently overwritten or deleted.
+  - Once an encounter is finalized and signed by a physician (`POST .../sign`), it is permanently locked against direct updates (`400 ENCOUNTER_IMMUTABLE`). Subsequent corrections are recorded as append-only addenda with author attribution and amendment reasons.
 - **Frontend**: Clinical encounter workspace at `/emr` with real-time BMI calculations and abnormal flags display.
 
 ### Day 12: EMR Part 2 — Diagnosis, Treatment and Patient Clinical History
@@ -95,12 +99,12 @@ All days were committed with their exact mandated commit messages and pushed cle
 ### Vitest Test Suite Execution (`npm test`):
 ```text
 Test Files  15 passed (15)
-     Tests  165 passed (165)
-  Duration  7.47s
+     Tests  166 passed (166)
+  Duration  7.23s
 ```
 - **Total Test Files**: 15 (100% passing)
-- **Total Tests**: 165 (100% passing)
-- **Test Growth**: Baseline = 85 tests (Days 1–6); Added in Days 7–12 = 80 tests.
+- **Total Tests**: 166 (100% passing)
+- **Test Growth**: Baseline = 85 tests (Days 1–6); Added in Days 7–12 = 81 tests.
 
 ### Complete List of Verified Test Suites:
 1. `tests/unit/jwt.test.ts` (4 tests) - Token generation and verification

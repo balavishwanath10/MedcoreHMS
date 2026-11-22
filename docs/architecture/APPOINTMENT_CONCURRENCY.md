@@ -1,22 +1,22 @@
 # MedCoreHMS — Appointment Concurrency & Conflict Prevention Architecture
 
-**Project:** MedCoreHMS  
-**Specification:** PRD v1.0 Functional Source of Truth  
-**Architecture Date:** 2026-11-22  
-**Target Engine:** MongoDB 7+ / Atlas (Replica Set) via Mongoose 8  
+- **Project:** MedCoreHMS
+- **Specification:** PRD v1.0 Functional Source of Truth
+- **Architecture Updated:** 2026-11-22
+- **Target Engine:** MongoDB 7+ / Atlas (Replica Set) via Mongoose 8
 
 ---
 
 ## 1. Concurrency Problem Definition & Race Conditions
 
-In high-concurrency hospital operations, two common race conditions threaten clinical scheduling integrity:
+In high-concurrency hospital operations, three critical race conditions threaten clinical scheduling integrity:
 
 1. **Doctor Double-Booking Race Condition:**  
    Two independent patients simultaneously observe an open 09:00 AM slot for Dr. Smith and submit booking requests at the exact same millisecond ($T_0$).  
-   If the application only does a non-atomic "check-then-act" (`find` existing appointments, see 0, then `create`), both requests see an open slot, both create documents, and Dr. Smith is double-booked for the exact same consultation window.
+   If the application only does a non-atomic "check-then-act" (`find` existing appointments, see 0, then `create`), both requests see an open slot, both create documents, and Dr. Smith is double-booked.
 
 2. **Patient Multi-Doctor Overlap Race Condition:**  
-   A patient concurrently books a 10:00 AM Cardiology consultation and a 10:00 AM Dermatology consultation across two different browser tabs. The patient cannot be in two examination rooms simultaneously.
+   A patient concurrently books a 10:00 AM Cardiology consultation and a 10:00 AM Dermatology consultation across two different browser tabs. A human patient cannot physically be in two examination rooms simultaneously.
 
 3. **Time Interval Partial Overlap:**  
    An existing appointment runs from 09:00 AM to 09:45 AM. A subsequent appointment request for 09:30 AM to 10:00 AM overlaps by 15 minutes. Simple equality checks fail to catch partial overlaps.
@@ -31,110 +31,133 @@ To guarantee zero double-booking and absolute race condition protection without 
 flowchart TD
     Req[Incoming Booking Request] --> AuthCheck[1. Tenant Scoping & RBAC Verification]
     AuthCheck --> ScheduleCheck[2. Shift Availability & Past Date Validation]
-    ScheduleCheck --> IntervalQuery[3. Overlap Pre-Flight Query in Session]
-    IntervalQuery -- Conflict Found --> ConflictErr[409 Conflict: DOCTOR_DOUBLE_BOOKING]
-    IntervalQuery -- No Overlap --> MongoInsert[4. Atomic Insert against Compound Unique Indexes]
-    MongoInsert -- Code 11000 Unique Violation --> IndexConflict[409 Conflict: Double-Booking Blocked]
-    MongoInsert -- Insert Succeeded --> Commit[201 Created & Booking Confirmed]
+    AuthCheck --> ScopeCheck[3. Patient User Scope Resolution across Profiles]
+    ScheduleCheck --> TxBegin[4. Start MongoDB Client Session & Transaction]
+    TxBegin --> DocLock[5. Document Version Lock on DoctorProfile & PatientProfile]
+    DocLock --> IntervalQuery[6. Comprehensive Interval Overlap Query in Session]
+    IntervalQuery -- Conflict Detected --> AbortTx[Abort Transaction -> 409 Conflict]
+    IntervalQuery -- Clean Interval --> MongoInsert[7. Insert Appointment with isCancelled: false]
+    MongoInsert -- Unique Violation (Code 11000) --> Trap11000[Abort Tx -> 409 Slot Conflict]
+    MongoInsert -- Insert Succeeded --> CommitTx[Commit Transaction -> 201 Created]
 ```
 
-### Layer 1: Compound Unique Partial Indexes (Database Constraint Authority)
+---
 
-The database engine is the final authority. We enforce unique compound indexes on the `appointments` collection with partial filter expressions so that soft-deleted or cancelled appointments do not block new bookings:
+### Layer 1: Valid MongoDB Compound Unique Partial Indexes
+
+#### Critical Engine Constraint: No `$nin` in `partialFilterExpression`
+MongoDB's `partialFilterExpression` specification strictly restricts supported operators to equality, `$exists: true`, `$gt`/`$gte`/`$lt`/`$lte`, `$type`, and top-level `$and`. Using `$nin` or `$ne` inside `partialFilterExpression` is rejected by MongoDB server with a `BadValue` exception.
+
+MedCoreHMS resolves this cleanly using boolean equality tracking (`isCancelled: false` and `isDeleted: false`):
 
 ```typescript
-// 1. Doctor Double-Booking Prevention Index
+// 1. Doctor Double-Booking Prevention Index (Valid MongoDB Equality Expression)
 appointmentSchema.index(
   { hospitalId: 1, doctorId: 1, startTime: 1 },
   {
     unique: true,
     partialFilterExpression: {
       isDeleted: false,
-      status: { $nin: ['CANCELLED'] },
+      isCancelled: false,
     },
-  }
+  },
 );
 
-// 2. Patient Overlap Prevention Index
+// 2. Patient Overlap Prevention Index (Valid MongoDB Equality Expression)
 appointmentSchema.index(
   { hospitalId: 1, patientId: 1, startTime: 1 },
   {
     unique: true,
     partialFilterExpression: {
       isDeleted: false,
-      status: { $nin: ['CANCELLED'] },
+      isCancelled: false,
     },
-  }
+  },
 );
-```
 
-**Why this prevents the race:** Even if two concurrent threads pass application-level memory checks simultaneously, MongoDB's storage engine enforces index uniqueness at the document write lock stage. Exactly one insert succeeds; the second request fails with error code `11000` (Duplicate Key), which our controller intercepts and translates into HTTP 409 Conflict (`DOCTOR_DOUBLE_BOOKING`).
-
----
-
-### Layer 2: Interval Overlap Pre-Flight Verification
-
-For appointments that might overlap without sharing the exact same `startTime` (e.g., custom durations or emergency extensions), the application executes an interval overlap query:
-
-$$\text{Overlap Condition: } (\text{existing.startTime} < \text{req.endTime}) \land (\text{existing.endTime} > \text{req.startTime})$$
-
-In MongoDB syntax:
-```typescript
-const doctorOverlap = await Appointment.findOne({
-  hospitalId,
-  doctorId,
-  isDeleted: false,
-  status: { $nin: ['CANCELLED'] },
-  startTime: { $lt: requestedEndTime },
-  endTime: { $gt: requestedStartTime },
+// 3. Interval Query Optimization Indexes
+appointmentSchema.index({
+  hospitalId: 1,
+  doctorId: 1,
+  isCancelled: 1,
+  isDeleted: 1,
+  startTime: 1,
+  endTime: 1,
+});
+appointmentSchema.index({
+  hospitalId: 1,
+  patientId: 1,
+  isCancelled: 1,
+  isDeleted: 1,
+  startTime: 1,
+  endTime: 1,
 });
 ```
-If an overlapping document is found, the request is immediately rejected with HTTP 409 `DOCTOR_DOUBLE_BOOKING`.
+
+**Lifecycle Synchronization:**
+- Newly booked active appointments initialize with `isCancelled: false`.
+- When an appointment is cancelled, the controller transitions `status = 'CANCELLED'` and sets `isCancelled = true`.
+- Once `isCancelled: true`, the appointment drops out of the partial index, immediately freeing the slot for new bookings.
 
 ---
 
-### Layer 3: MongoDB Transactions & Session Boundaries
+### Layer 2: True Serialization of Partial Interval Overlaps via Document Locking
 
-In production environments running on MongoDB Atlas replica sets:
-1. Operations execute within a client session (`await mongoose.startSession()`).
-2. The session starts an ACID multi-document transaction (`session.startTransaction()`).
-3. Transient transaction errors (such as write conflicts) are retried automatically with exponential backoff:
+Exact-match unique indexes only catch collisions when two requests specify identical `startTime`. To prevent partial interval overlaps (e.g. 09:15–09:45 colliding with 09:00–09:30):
+
+1. **Transactional Serialization**:
+   Within a MongoDB multi-document transaction (`session.startTransaction()`), the booking controller issues an atomic update to both the doctor and patient records:
    ```typescript
-   const MAX_RETRIES = 3;
-   for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
-     try {
-       // execute transaction
-       await session.commitTransaction();
-       break;
-     } catch (err: any) {
-       if (err.hasErrorLabel?.('TransientTransactionError') && attempt < MAX_RETRIES) {
-         await new Promise((res) => setTimeout(res, 50 * Math.pow(2, attempt)));
-         continue;
-       }
-       throw err;
-     }
-   }
+   await DoctorProfile.updateOne(
+     { _id: validated.doctorId },
+     { $inc: { bookingLockVersion: 1 } },
+     { session }
+   );
+   await PatientProfile.updateOne(
+     { _id: validated.patientId },
+     { $inc: { bookingLockVersion: 1 } },
+     { session }
+   );
    ```
-4. If running in a standalone development environment or mock where replica set transactions are unsupported, the engine falls back gracefully to atomic compound index constraints and pre-flight locks without crashing.
+2. **Write Lock Effect**:
+   MongoDB's WiredTiger engine acquires an exclusive document write lock on the target `DoctorProfile` and `PatientProfile`. Any concurrent booking attempt for the same doctor or patient is forced to wait or abort with `WriteConflict`.
+3. **Serialized Interval Evaluation**:
+   Under this exclusive lock, the interval query executes:
+   $$\text{Overlap Condition: } (\text{startTime} < \text{req.endTime}) \land (\text{endTime} > \text{req.startTime})$$
+   Because concurrent bookings are serialized, the second transaction reads the newly committed appointment and aborts with `409 DOCTOR_DOUBLE_BOOKING` or `409 PATIENT_OVERLAPPING_APPOINTMENT`.
 
 ---
 
-### Layer 4: Emergency Booking Rules & Exceptions
+### Layer 3: Comprehensive Patient Scheduling Scope
 
-Per PRD Section 4.3:
-- An `EMERGENCY` booking is designated with `isEmergency: true` (or `type: 'EMERGENCY'`).
-- Authorized clinical personnel (`DOCTOR`, `NURSE`, `HOSPITAL_ADMIN`, `SUPER_ADMIN`) may bypass regular doctor working-hour boundaries.
-- **Critical Safety Guardrail:** Emergency bookings **never** bypass authentication, tenant boundary checks, or audit trail logging. If an emergency booking overlaps an existing normal consultation, the system generates an audit record and alerts the attending clinical team.
+In a multi-hospital system, a single patient user may hold multiple patient profiles across different departments or hospitals. The booking engine resolves the patient's global identity:
+- If `patient.userId` exists, the engine queries all patient profile IDs associated with that user.
+- The patient conflict check evaluates interval collisions across all linked profiles:
+  ```typescript
+  const patientConflict = await Appointment.findOne({
+    patientId: { $in: patientProfileIds },
+    isDeleted: false,
+    isCancelled: false,
+    startTime: { $lt: validated.endTime },
+    endTime: { $gt: validated.startTime },
+  }).session(session);
+  ```
 
 ---
 
-## 3. Concurrency Error Response Matrix
+### Layer 4: Duplicate-Key and Transient Conflict Handling
 
-| Condition | Database Behavior | HTTP Status | Error Code | Client Message |
-| :--- | :--- | :---: | :---: | :--- |
-| Concurrent exact slot collision (Doctor) | Unique Index `11000` on `(hospitalId, doctorId, startTime)` | `409 Conflict` | `DOCTOR_DOUBLE_BOOKING` | The requested appointment slot has already been booked. |
-| Concurrent exact slot collision (Patient) | Unique Index `11000` on `(hospitalId, patientId, startTime)` | `409 Conflict` | `PATIENT_OVERLAPPING_APPOINTMENT` | Patient already has an overlapping appointment scheduled at this time. |
-| Partial interval overlap (Doctor) | Pre-flight interval range query match | `409 Conflict` | `DOCTOR_DOUBLE_BOOKING` | Doctor is unavailable during the requested time range. |
-| Slot outside Doctor availability | Shift validation lookup fails | `400 Bad Request` | `OUTSIDE_DOCTOR_AVAILABILITY` | Selected slot falls outside doctor's configured working hours. |
-| Past appointment time | Date validation `< Date.now()` | `400 Bad Request` | `INVALID_DATE` | Cannot book appointments in the past. |
-| Cross-tenant booking attempt | Tenant isolation validation | `403 Forbidden` | `CROSS_TENANT_ACCESS_DENIED` | Access to resources of another hospital is strictly prohibited. |
+When concurrent requests race at the database engine level:
+- Code `11000` (`MongoServerError`) is caught and classified by key pattern (`doctorId` -> `DOCTOR_DOUBLE_BOOKING`, `patientId` -> `PATIENT_OVERLAPPING_APPOINTMENT`).
+- Transactions are cleanly aborted via `session.abortTransaction()` in error blocks, leaving no phantom locks or orphaned reservations.
+- If running in standalone or mock environments where transactions are unavailable, the engine falls back gracefully to atomic interval verification with clear diagnostic logging.
+
+---
+
+## 3. Test Classification & Evidence Standards
+
+MedCoreHMS enforces strict test classification rules:
+1. **Mocked Controller Tests**: Vitest spies mock Mongoose methods (`findOne`, `create`) to verify HTTP response codes, error envelope structure, and business logic paths without invoking a database.
+2. **In-Memory Tests**: Memory-based collections verify schema validations, Zod constraints, and model field transformations.
+3. **Real MongoDB Integration Tests**: Execute against a live MongoDB daemon or Atlas cluster, verifying actual index creation, partial filter expressions, and transaction sessions.
+4. **Real Database Concurrency Tests**: Two real network connections issuing simultaneous writes against MongoDB Atlas to prove WiredTiger index locks and code 11000 trapping.

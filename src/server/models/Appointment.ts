@@ -116,6 +116,11 @@ const appointmentSchema = new Schema<AppointmentDocument>(
       trim: true,
       maxlength: [500, 'Cancellation reason cannot exceed 500 characters'],
     },
+    isCancelled: {
+      type: Boolean,
+      default: false,
+      index: true,
+    },
     statusHistory: {
       type: [statusHistorySchema],
       default: () => [],
@@ -138,31 +143,49 @@ const appointmentSchema = new Schema<AppointmentDocument>(
 );
 
 // Compound Unique Indexes to Prevent Race Conditions & Double-Booking
-// 1. Doctor Double-Booking Prevention: A doctor cannot have two active appointments at the exact same startTime
+// 1. Doctor Double-Booking Prevention: Valid MongoDB equality partial index
 appointmentSchema.index(
   { hospitalId: 1, doctorId: 1, startTime: 1 },
   {
     unique: true,
     partialFilterExpression: {
       isDeleted: false,
-      status: { $nin: ['CANCELLED'] },
+      isCancelled: false,
     },
   },
 );
 
-// 2. Patient Overlap Prevention: A patient cannot have two active appointments at the exact same startTime across any doctor
+// 2. Patient Overlap Prevention: Valid MongoDB equality partial index
 appointmentSchema.index(
   { hospitalId: 1, patientId: 1, startTime: 1 },
   {
     unique: true,
     partialFilterExpression: {
       isDeleted: false,
-      status: { $nin: ['CANCELLED'] },
+      isCancelled: false,
     },
   },
 );
 
-// 3. Operational query indexes
+// 3. Interval conflict optimization indexes
+appointmentSchema.index({
+  hospitalId: 1,
+  doctorId: 1,
+  isCancelled: 1,
+  isDeleted: 1,
+  startTime: 1,
+  endTime: 1,
+});
+appointmentSchema.index({
+  hospitalId: 1,
+  patientId: 1,
+  isCancelled: 1,
+  isDeleted: 1,
+  startTime: 1,
+  endTime: 1,
+});
+
+// 4. Operational query indexes
 appointmentSchema.index({ hospitalId: 1, patientId: 1, startTime: -1 });
 appointmentSchema.index({ hospitalId: 1, status: 1, startTime: 1 });
 appointmentSchema.index({ hospitalId: 1, isDeleted: 1 });

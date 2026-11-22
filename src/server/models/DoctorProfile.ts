@@ -61,6 +61,10 @@ const doctorProfileSchema = new Schema<DoctorProfileDocument>(
       trim: true,
       maxlength: [1000, 'Bio cannot exceed 1000 characters'],
     },
+    bookingLockVersion: {
+      type: Number,
+      default: 0,
+    },
     isActive: {
       type: Boolean,
       default: true,

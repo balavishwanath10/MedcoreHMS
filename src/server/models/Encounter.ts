@@ -4,6 +4,7 @@ import {
   IVitals,
   ISymptom,
   IEncounterAddendum,
+  IClinicalRevision,
   IDiagnosis,
   ITreatmentPlan,
 } from '../../shared/types/index.js';
@@ -93,6 +94,20 @@ const AddendumSchema = new Schema<IEncounterAddendum>(
   { _id: false },
 );
 
+const ClinicalRevisionSchema = new Schema<IClinicalRevision>(
+  {
+    revisionNumber: { type: Number, required: true },
+    authorId: { type: String, required: true },
+    authorRole: { type: String, required: true },
+    authorName: { type: String, default: 'Clinical User' },
+    reasonForChange: { type: String, required: true, trim: true },
+    previousSnapshot: { type: Schema.Types.Mixed, required: true },
+    changedFields: [{ type: String, required: true }],
+    createdAt: { type: Date, default: Date.now },
+  },
+  { _id: false },
+);
+
 const EncounterSchema = new Schema<EncounterDocument>(
   {
     hospitalId: {
@@ -162,6 +177,7 @@ const EncounterSchema = new Schema<EncounterDocument>(
       default: null,
     },
     addenda: [AddendumSchema],
+    revisions: [ClinicalRevisionSchema],
     isDeleted: {
       type: Boolean,
       default: false,

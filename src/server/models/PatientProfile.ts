@@ -106,6 +106,10 @@ const patientProfileSchema = new Schema<PatientProfileDocument>(
       type: Boolean,
       default: false,
     },
+    bookingLockVersion: {
+      type: Number,
+      default: 0,
+    },
   },
   {
     timestamps: true,

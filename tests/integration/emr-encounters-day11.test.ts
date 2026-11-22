@@ -195,6 +195,7 @@ describe('Day 11: EMR Encounters, Vitals & Immutability Integration Tests', () =
         hospitalId: hospitalAId,
         status: 'OPEN',
         chiefComplaint: 'Old complaint',
+        revisions: [],
         save: vi.fn().mockResolvedValue(true),
       };
 
@@ -207,13 +208,68 @@ describe('Day 11: EMR Encounters, Vitals & Immutability Integration Tests', () =
         body: {
           chiefComplaint: 'Updated complaint with new findings',
           assessment: 'Stable condition',
+          reasonForChange: 'Patient reported secondary symptoms during consultation',
         },
       });
 
       expect(res.statusCode).toBe(200);
       expect(res.body.success).toBe(true);
       expect(mockEncounter.chiefComplaint).toBe('Updated complaint with new findings');
+      expect(mockEncounter.revisions).toHaveLength(1);
+      expect(mockEncounter.revisions[0].previousSnapshot.chiefComplaint).toBe('Old complaint');
+      expect(mockEncounter.revisions[0].reasonForChange).toBe(
+        'Patient reported secondary symptoms during consultation',
+      );
+      expect(mockEncounter.revisions[0].changedFields).toContain('chiefComplaint');
       expect(mockEncounter.save).toHaveBeenCalled();
+    });
+
+    it('CRITICAL APPEND-ONLY AUDIT: should preserve historical entry snapshot when open encounter is updated multiple times', async () => {
+      const doctorToken = createToken(ROLES.DOCTOR);
+
+      const mockEncounter: any = {
+        _id: encounterId,
+        hospitalId: hospitalAId,
+        status: 'OPEN',
+        chiefComplaint: 'Original entry baseline',
+        revisions: [],
+        save: vi.fn().mockResolvedValue(true),
+      };
+
+      (vi.spyOn(Encounter, 'findOne') as any).mockResolvedValue(mockEncounter);
+
+      // First revision
+      await makeRequest(app, {
+        method: 'PUT',
+        url: `/api/encounters/${encounterId}`,
+        headers: { authorization: `Bearer ${doctorToken}` },
+        body: {
+          chiefComplaint: 'First revision text',
+          reasonForChange: 'Lab results reviewed',
+        },
+      });
+
+      // Second revision
+      await makeRequest(app, {
+        method: 'PUT',
+        url: `/api/encounters/${encounterId}`,
+        headers: { authorization: `Bearer ${doctorToken}` },
+        body: {
+          chiefComplaint: 'Second revision text',
+          reasonForChange: 'Attending physician follow-up note',
+        },
+      });
+
+      expect(mockEncounter.revisions).toHaveLength(2);
+      expect(mockEncounter.revisions[0].previousSnapshot.chiefComplaint).toBe(
+        'Original entry baseline',
+      );
+      expect(mockEncounter.revisions[0].reasonForChange).toBe('Lab results reviewed');
+      expect(mockEncounter.revisions[1].previousSnapshot.chiefComplaint).toBe(
+        'First revision text',
+      );
+      expect(mockEncounter.revisions[1].reasonForChange).toBe('Attending physician follow-up note');
+      expect(mockEncounter.chiefComplaint).toBe('Second revision text');
     });
 
     it('CRITICAL IMMUTABILITY: should reject direct modification of a SIGNED encounter', async () => {
@@ -345,7 +401,8 @@ describe('Day 11: EMR Encounters, Vitals & Immutability Integration Tests', () =
         headers: { authorization: `Bearer ${doctorToken}` },
         body: {
           amendmentReason: 'Lab follow-up results',
-          notes: 'Serum troponin returned negative at 6 hours. Patient discharged in stable condition.',
+          notes:
+            'Serum troponin returned negative at 6 hours. Patient discharged in stable condition.',
         },
       });
 

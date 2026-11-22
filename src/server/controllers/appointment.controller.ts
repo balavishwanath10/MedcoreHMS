@@ -8,6 +8,7 @@ import {
   appointmentCreateSchema,
   appointmentStatusUpdateSchema,
 } from '../../shared/schemas/index.js';
+import { AppointmentStatus } from '../../shared/types/index.js';
 import { timeToMinutes } from '../utils/slotGenerator.js';
 import { logger } from '../utils/logger.js';
 import { notificationService } from '../services/notification.service.js';
@@ -188,58 +189,132 @@ export async function createAppointment(
       }
     }
 
-    // 5. Pre-Flight Overlap Checks (Doctor double-booking & Patient multi-booking)
-    const doctorConflict = await Appointment.findOne({
-      hospitalId: validated.hospitalId,
-      doctorId: validated.doctorId,
-      isDeleted: false,
-      status: { $nin: ['CANCELLED'] },
-      startTime: { $lt: validated.endTime },
-      endTime: { $gt: validated.startTime },
-    });
-
-    if (doctorConflict) {
-      res.status(409).json({
-        success: false,
-        error: {
-          code: 'DOCTOR_DOUBLE_BOOKING',
-          message:
-            'The requested doctor is already booked for an appointment during this time window.',
-        },
-        timestamp: new Date().toISOString(),
-      });
-      return;
+    // 5. Gather all patient profile IDs for comprehensive patient scheduling scope
+    const patientProfileIds: any[] = [validated.patientId];
+    if (patient.userId && mongoose.connection.readyState === 1) {
+      try {
+        const siblingProfiles = await PatientProfile.find({
+          userId: patient.userId,
+          isDeleted: false,
+        }).select('_id');
+        siblingProfiles.forEach((p) => {
+          if (!patientProfileIds.includes(p._id.toString())) {
+            patientProfileIds.push(p._id);
+          }
+        });
+      } catch {
+        // Fallback to primary patientId
+      }
     }
 
-    const patientConflict = await Appointment.findOne({
-      hospitalId: validated.hospitalId,
-      patientId: validated.patientId,
-      isDeleted: false,
-      status: { $nin: ['CANCELLED'] },
-      startTime: { $lt: validated.endTime },
-      endTime: { $gt: validated.startTime },
-    });
+    // 6. Atomic Booking Engine with Transaction & Partial Interval Overlap Protection
+    let session: mongoose.ClientSession | null = null;
+    let useTransaction = false;
 
-    if (patientConflict) {
-      res.status(409).json({
-        success: false,
-        error: {
-          code: 'PATIENT_OVERLAPPING_APPOINTMENT',
-          message: 'The patient already has another appointment scheduled during this time window.',
-        },
-        timestamp: new Date().toISOString(),
-      });
-      return;
-    }
-
-    // 6. Persist with Compound Index Safety Guardrails
     try {
-      const initialStatus = isEmergency ? 'CONFIRMED' : 'CONFIRMED';
-      const appointment = await Appointment.create({
+      if (mongoose.connection.readyState === 1 && typeof mongoose.startSession === 'function') {
+        try {
+          session = await mongoose.startSession();
+          if (session) {
+            session.startTransaction();
+            useTransaction = true;
+          }
+        } catch (sessionErr: any) {
+          session = null;
+          useTransaction = false;
+          logger.info('Running booking in non-transactional mode (standalone or test mock)', {
+            reason: sessionErr.message,
+          });
+        }
+      }
+
+      // Serialize concurrent transactions on doctor & patient via document version updates
+      if (useTransaction && session) {
+        await DoctorProfile.updateOne(
+          { _id: validated.doctorId },
+          { $inc: { bookingLockVersion: 1 } },
+          { session },
+        );
+        await PatientProfile.updateOne(
+          { _id: validated.patientId },
+          { $inc: { bookingLockVersion: 1 } },
+          { session },
+        );
+      }
+
+      // Interval overlap check on Doctor
+      const doctorConflictQuery = Appointment.findOne({
+        hospitalId: validated.hospitalId,
+        doctorId: validated.doctorId,
+        isDeleted: false,
+        isCancelled: false,
+        startTime: { $lt: validated.endTime },
+        endTime: { $gt: validated.startTime },
+      });
+      if (useTransaction && session) {
+        doctorConflictQuery.session(session);
+      }
+      const doctorConflict = await doctorConflictQuery;
+
+      if (doctorConflict) {
+        if (useTransaction && session) {
+          await session.abortTransaction();
+        }
+        res.status(409).json({
+          success: false,
+          error: {
+            code: 'DOCTOR_DOUBLE_BOOKING',
+            message:
+              'The requested doctor is already booked for an appointment during this time window.',
+          },
+          timestamp: new Date().toISOString(),
+        });
+        return;
+      }
+
+      // Interval overlap check on Patient (across all profiles linked to patient user)
+      const patientConflictQuery = Appointment.findOne({
+        patientId: { $in: patientProfileIds },
+        isDeleted: false,
+        isCancelled: false,
+        startTime: { $lt: validated.endTime },
+        endTime: { $gt: validated.startTime },
+      });
+      if (useTransaction && session) {
+        patientConflictQuery.session(session);
+      }
+      const patientConflict = await patientConflictQuery;
+
+      if (patientConflict) {
+        if (useTransaction && session) {
+          await session.abortTransaction();
+        }
+        res.status(409).json({
+          success: false,
+          error: {
+            code: 'PATIENT_OVERLAPPING_APPOINTMENT',
+            message:
+              'The patient already has another appointment scheduled during this time window.',
+          },
+          timestamp: new Date().toISOString(),
+        });
+        return;
+      }
+
+      // Initial status aligns with PRD lifecycle: PENDING -> CONFIRMED -> IN_PROGRESS -> COMPLETED
+      const initialStatus: AppointmentStatus = isEmergency
+        ? 'CONFIRMED'
+        : userRole === 'PATIENT'
+          ? 'PENDING'
+          : 'CONFIRMED';
+
+      const appointmentData = {
         ...validated,
         departmentId,
         status: initialStatus,
         isEmergency,
+        isCancelled: false,
+        isDeleted: false,
         statusHistory: [
           {
             status: initialStatus,
@@ -248,8 +323,16 @@ export async function createAppointment(
             reason: isEmergency ? 'Emergency clinical booking' : 'Standard scheduled consultation',
           },
         ],
-        isDeleted: false,
-      });
+      };
+
+      let appointment: any;
+      if (useTransaction && session) {
+        const createdArr = await Appointment.create([appointmentData], { session });
+        appointment = createdArr[0];
+        await session.commitTransaction();
+      } else {
+        appointment = await Appointment.create(appointmentData);
+      }
 
       logger.info('Appointment created successfully', {
         appointmentId: appointment._id,
@@ -260,7 +343,7 @@ export async function createAppointment(
         isEmergency,
       });
 
-      // Safe asynchronous reminder dispatch evaluation
+      // Asynchronous reminder dispatch evaluation (24h & 1h prior)
       notificationService
         .dispatchAppointmentReminder({
           appointmentId: appointment._id.toString(),
@@ -282,6 +365,10 @@ export async function createAppointment(
         timestamp: new Date().toISOString(),
       });
     } catch (dbErr: any) {
+      if (useTransaction && session && session.inTransaction()) {
+        await session.abortTransaction();
+      }
+
       // Catch MongoDB Duplicate Key Error (Code 11000)
       if (dbErr.code === 11000 || dbErr.name === 'MongoServerError') {
         const errorKey = Object.keys(dbErr.keyPattern || {})[0];
@@ -319,6 +406,10 @@ export async function createAppointment(
         return;
       }
       throw dbErr;
+    } finally {
+      if (session) {
+        await session.endSession();
+      }
     }
   } catch (error) {
     next(error);
@@ -617,6 +708,9 @@ export async function updateAppointmentStatus(
     }
 
     appointment.status = status;
+    if (status === 'CANCELLED') {
+      appointment.isCancelled = true;
+    }
     if (cancellationReason) {
       appointment.cancellationReason = cancellationReason;
     }

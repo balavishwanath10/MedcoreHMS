@@ -368,6 +368,7 @@ export const encounterUpdateSchema = z.object({
   assessment: z.string().trim().max(5000).optional(),
   diagnoses: z.array(diagnosisSchema).optional(),
   treatmentPlan: treatmentPlanSchema.optional(),
+  reasonForChange: z.string().trim().max(500).optional(),
 });
 
 export const encounterAddendumSchema = z.object({

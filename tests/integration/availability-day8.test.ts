@@ -5,7 +5,10 @@ import { makeRequest } from '../utils/inMemoryTestClient.js';
 import { generateAccessToken } from '../../src/server/utils/jwt.js';
 import { DoctorAvailability } from '../../src/server/models/DoctorAvailability.js';
 import { DoctorProfile } from '../../src/server/models/DoctorProfile.js';
-import { generateSlotsFromSchedule, hasIntervalOverlap } from '../../src/server/utils/slotGenerator.js';
+import {
+  generateSlotsFromSchedule,
+  hasIntervalOverlap,
+} from '../../src/server/utils/slotGenerator.js';
 import { UserRole } from '../../src/shared/types/index.js';
 
 describe('Day 8: Doctor Availability & Weekly Schedule Integration Tests', () => {

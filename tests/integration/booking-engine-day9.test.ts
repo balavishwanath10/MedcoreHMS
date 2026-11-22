@@ -9,7 +9,7 @@ import { PatientProfile } from '../../src/server/models/PatientProfile.js';
 import { DoctorAvailability } from '../../src/server/models/DoctorAvailability.js';
 import { UserRole } from '../../src/shared/types/index.js';
 
-describe('Day 9: Appointment Booking Engine & Concurrency Conflict Prevention Tests', () => {
+describe('Day 9: Appointment Booking Engine & Concurrency Conflict Prevention Tests [Mocked Controller & Schema Suite]', () => {
   const hospitalAId = new mongoose.Types.ObjectId().toString();
   const hospitalBId = new mongoose.Types.ObjectId().toString();
 
@@ -48,34 +48,32 @@ describe('Day 9: Appointment Booking Engine & Concurrency Conflict Prevention Te
   });
 
   // =========================================================================
-  // 1. Database-Level Schema Constraints Exercise
+  // 1. Database-Level Schema Constraints Exercise (In-Memory Schema Tests)
   // =========================================================================
-  describe('Database Compound Index Constraints Verification', () => {
-    it('should have compound unique partial index defined for doctor double-booking prevention', () => {
+  describe('Database Compound Index Constraints Verification [In-Memory Schema Test]', () => {
+    it('[In-Memory Schema Test] should have compound unique partial index defined for doctor double-booking prevention', () => {
       const indexes = Appointment.schema.indexes();
       const doctorIndex = indexes.find(
-        (idx) =>
-          idx[0].hospitalId === 1 && idx[0].doctorId === 1 && idx[0].startTime === 1,
+        (idx) => idx[0].hospitalId === 1 && idx[0].doctorId === 1 && idx[0].startTime === 1,
       );
       expect(doctorIndex).toBeDefined();
       expect(doctorIndex![1]?.unique).toBe(true);
       expect(doctorIndex![1]?.partialFilterExpression).toEqual({
         isDeleted: false,
-        status: { $nin: ['CANCELLED'] },
+        isCancelled: false,
       });
     });
 
-    it('should have compound unique partial index defined for patient overlap prevention', () => {
+    it('[In-Memory Schema Test] should have compound unique partial index defined for patient overlap prevention', () => {
       const indexes = Appointment.schema.indexes();
       const patientIndex = indexes.find(
-        (idx) =>
-          idx[0].hospitalId === 1 && idx[0].patientId === 1 && idx[0].startTime === 1,
+        (idx) => idx[0].hospitalId === 1 && idx[0].patientId === 1 && idx[0].startTime === 1,
       );
       expect(patientIndex).toBeDefined();
       expect(patientIndex![1]?.unique).toBe(true);
       expect(patientIndex![1]?.partialFilterExpression).toEqual({
         isDeleted: false,
-        status: { $nin: ['CANCELLED'] },
+        isCancelled: false,
       });
     });
   });
@@ -83,8 +81,8 @@ describe('Day 9: Appointment Booking Engine & Concurrency Conflict Prevention Te
   // =========================================================================
   // 2. Concurrency: Two Patients Attempting to Book Same Slot Simultaneously
   // =========================================================================
-  describe('Concurrent Double-Booking Prevention', () => {
-    it('MANDATORY: Two patients attempt to book the same doctor slot simultaneously — only one may succeed', async () => {
+  describe('Concurrent Double-Booking Prevention [Mocked Controller Tests]', () => {
+    it('[Mocked Controller Test] Two patients attempt to book the same doctor slot simultaneously — mocked E11000 duplicate key translates to 409 DOCTOR_DOUBLE_BOOKING', async () => {
       const token1 = createToken('PATIENT', hospitalAId, patient1UserId);
       const token2 = createToken('PATIENT', hospitalAId, patient2UserId);
 
@@ -181,7 +179,7 @@ describe('Day 9: Appointment Booking Engine & Concurrency Conflict Prevention Te
       expect(conflictResponses[0].body.error.code).toBe('DOCTOR_DOUBLE_BOOKING');
     });
 
-    it('MANDATORY: One patient attempts overlapping appointments with two different doctors — second must fail', async () => {
+    it('[Mocked Controller Test] One patient attempts overlapping appointments with two different doctors — pre-flight conflict check returns 409 PATIENT_OVERLAPPING_APPOINTMENT', async () => {
       const patientToken = createToken('PATIENT', hospitalAId, patient1UserId);
 
       vi.spyOn(PatientProfile, 'findOne').mockResolvedValue({

@@ -84,6 +84,7 @@ export interface IDoctorProfile {
   experienceYears: number;
   consultationFee: number;
   bio?: string;
+  bookingLockVersion?: number;
   isActive: boolean;
   isDeleted: boolean;
   createdAt?: string | Date;
@@ -138,6 +139,7 @@ export interface IPatientProfile {
     postalCode: string;
     country: string;
   };
+  bookingLockVersion?: number;
   isDeleted: boolean; // Soft delete flag (EMR records are immutable / never hard deleted)
   createdAt?: string | Date;
   updatedAt?: string | Date;
@@ -161,6 +163,7 @@ export interface IAppointment {
   isEmergency?: boolean;
   reason?: string;
   cancellationReason?: string;
+  isCancelled?: boolean;
   statusHistory?: Array<{
     status: AppointmentStatus;
     changedBy: string;
@@ -219,6 +222,17 @@ export interface IEncounterAddendum {
   createdAt: string | Date;
 }
 
+export interface IClinicalRevision {
+  revisionNumber: number;
+  authorId: string;
+  authorRole: string;
+  authorName?: string;
+  reasonForChange: string;
+  previousSnapshot: Record<string, any>;
+  changedFields: string[];
+  createdAt: string | Date;
+}
+
 export interface IEncounter {
   _id?: string;
   hospitalId: string;
@@ -237,6 +251,7 @@ export interface IEncounter {
   signedAt?: string | Date | null;
   signedBy?: string | null;
   addenda?: IEncounterAddendum[];
+  revisions?: IClinicalRevision[];
   isDeleted: boolean;
   createdAt?: string | Date;
   updatedAt?: string | Date;

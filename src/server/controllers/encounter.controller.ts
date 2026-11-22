@@ -13,6 +13,7 @@ import {
 import { enrichVitals } from '../utils/vitalsCalculator.js';
 import { logger } from '../utils/logger.js';
 import { ROLES, UserRole } from '../../shared/constants/roles.js';
+import { IClinicalRevision } from '../../shared/types/index.js';
 
 export class EncounterController {
   /**
@@ -402,23 +403,85 @@ export class EncounterController {
 
       const validated = encounterUpdateSchema.parse(req.body);
 
-      if (validated.chiefComplaint !== undefined) {
+      // EMR APPEND-ONLY IMMUTABILITY:
+      // Capture historical snapshot before updating, ensuring no clinical entries are silently overwritten
+      const changedFields: string[] = [];
+      const previousSnapshot: Record<string, any> = {};
+
+      if (
+        validated.chiefComplaint !== undefined &&
+        validated.chiefComplaint !== encounter.chiefComplaint
+      ) {
+        changedFields.push('chiefComplaint');
+        previousSnapshot.chiefComplaint = encounter.chiefComplaint;
         encounter.chiefComplaint = validated.chiefComplaint;
       }
       if (validated.vitals !== undefined) {
+        changedFields.push('vitals');
+        previousSnapshot.vitals = encounter.vitals
+          ? JSON.parse(JSON.stringify(encounter.vitals))
+          : undefined;
         encounter.vitals = enrichVitals(validated.vitals);
       }
       if (validated.symptoms !== undefined) {
-        encounter.symptoms = validated.symptoms;
+        changedFields.push('symptoms');
+        previousSnapshot.symptoms = encounter.symptoms
+          ? JSON.parse(JSON.stringify(encounter.symptoms))
+          : [];
+        encounter.symptoms = validated.symptoms as any;
       }
-      if (validated.historyOfPresentIllness !== undefined) {
+      if (
+        validated.historyOfPresentIllness !== undefined &&
+        validated.historyOfPresentIllness !== encounter.historyOfPresentIllness
+      ) {
+        changedFields.push('historyOfPresentIllness');
+        previousSnapshot.historyOfPresentIllness = encounter.historyOfPresentIllness;
         encounter.historyOfPresentIllness = validated.historyOfPresentIllness;
       }
-      if (validated.clinicalNotes !== undefined) {
+      if (
+        validated.clinicalNotes !== undefined &&
+        validated.clinicalNotes !== encounter.clinicalNotes
+      ) {
+        changedFields.push('clinicalNotes');
+        previousSnapshot.clinicalNotes = encounter.clinicalNotes;
         encounter.clinicalNotes = validated.clinicalNotes;
       }
-      if (validated.assessment !== undefined) {
+      if (validated.assessment !== undefined && validated.assessment !== encounter.assessment) {
+        changedFields.push('assessment');
+        previousSnapshot.assessment = encounter.assessment;
         encounter.assessment = validated.assessment;
+      }
+      if (validated.diagnoses !== undefined) {
+        changedFields.push('diagnoses');
+        previousSnapshot.diagnoses = encounter.diagnoses
+          ? JSON.parse(JSON.stringify(encounter.diagnoses))
+          : [];
+        encounter.diagnoses = validated.diagnoses as any;
+      }
+      if (validated.treatmentPlan !== undefined) {
+        changedFields.push('treatmentPlan');
+        previousSnapshot.treatmentPlan = encounter.treatmentPlan
+          ? JSON.parse(JSON.stringify(encounter.treatmentPlan))
+          : undefined;
+        encounter.treatmentPlan = validated.treatmentPlan as any;
+      }
+
+      if (changedFields.length > 0) {
+        if (!encounter.revisions) {
+          encounter.revisions = [];
+        }
+        const revisionCount = encounter.revisions.length + 1;
+        const revision: IClinicalRevision = {
+          revisionNumber: revisionCount,
+          authorId: req.user?.userId || 'SYSTEM',
+          authorRole: req.user?.role || 'UNKNOWN',
+          authorName: req.user?.email || 'Clinical Staff',
+          reasonForChange: validated.reasonForChange || 'Clinical documentation update',
+          previousSnapshot,
+          changedFields,
+          createdAt: new Date(),
+        };
+        encounter.revisions.push(revision);
       }
 
       await encounter.save();
