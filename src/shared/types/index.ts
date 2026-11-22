@@ -143,6 +143,35 @@ export interface IPatientProfile {
   updatedAt?: string | Date;
 }
 
+export type AppointmentStatus =
+  'PENDING' | 'CONFIRMED' | 'IN_PROGRESS' | 'COMPLETED' | 'CANCELLED' | 'NO_SHOW';
+
+export type AppointmentType = 'ROUTINE' | 'EMERGENCY' | 'FOLLOW_UP' | 'TELEMEDICINE';
+
+export interface IAppointment {
+  _id?: string;
+  hospitalId: string;
+  patientId: string;
+  doctorId: string;
+  departmentId?: string;
+  startTime: Date | string;
+  endTime: Date | string;
+  status: AppointmentStatus;
+  type: AppointmentType;
+  isEmergency?: boolean;
+  reason?: string;
+  cancellationReason?: string;
+  statusHistory?: Array<{
+    status: AppointmentStatus;
+    changedBy: string;
+    changedAt: Date | string;
+    reason?: string;
+  }>;
+  isDeleted: boolean;
+  createdAt?: string | Date;
+  updatedAt?: string | Date;
+}
+
 export interface ApiResponse<T = unknown> {
   success: boolean;
   data?: T;

@@ -143,3 +143,45 @@ export async function fetchAvailableSlots(doctorId: string, date: string): Promi
   }
   return result.data;
 }
+
+export async function fetchAppointments(params?: Record<string, string>): Promise<any[]> {
+  const query = params ? `?${new URLSearchParams(params).toString()}` : '';
+  const response = await fetch(`/api/appointments${query}`, {
+    headers: { ...getAuthHeader(), 'Content-Type': 'application/json' },
+  });
+  const result: ApiResponse<any[]> = await response.json();
+  if (!result.success || !result.data) {
+    throw new Error(result.error?.message || 'Failed to fetch appointments');
+  }
+  return result.data;
+}
+
+export async function createAppointment(data: any): Promise<any> {
+  const response = await fetch('/api/appointments', {
+    method: 'POST',
+    headers: { ...getAuthHeader(), 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  });
+  const result: ApiResponse<any> = await response.json();
+  if (!result.success || !result.data) {
+    throw new Error(result.error?.message || 'Failed to book appointment');
+  }
+  return result.data;
+}
+
+export async function updateAppointmentStatus(
+  id: string,
+  status: string,
+  reason?: string,
+): Promise<any> {
+  const response = await fetch(`/api/appointments/${id}/status`, {
+    method: 'PATCH',
+    headers: { ...getAuthHeader(), 'Content-Type': 'application/json' },
+    body: JSON.stringify({ status, reason }),
+  });
+  const result: ApiResponse<any> = await response.json();
+  if (!result.success || !result.data) {
+    throw new Error(result.error?.message || 'Failed to update appointment status');
+  }
+  return result.data;
+}

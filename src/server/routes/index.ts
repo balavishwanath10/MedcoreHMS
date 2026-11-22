@@ -6,6 +6,7 @@ import { hospitalRouter } from './hospital.routes.js';
 import { departmentRouter } from './department.routes.js';
 import { doctorRouter } from './doctor.routes.js';
 import { availabilityRouter } from './availability.routes.js';
+import { appointmentRouter } from './appointment.routes.js';
 
 export const apiRouter = Router();
 
@@ -36,6 +37,10 @@ apiRouter.use('/v1/doctors', doctorRouter);
 apiRouter.use('/availability', availabilityRouter);
 apiRouter.use('/v1/availability', availabilityRouter);
 
+// Mount Appointment routes under /api/appointments and /api/v1/appointments
+apiRouter.use('/appointments', appointmentRouter);
+apiRouter.use('/v1/appointments', appointmentRouter);
+
 // Base route for /api
 apiRouter.get('/', (_req, res) => {
   res.json({
@@ -53,6 +58,7 @@ apiRouter.get('/', (_req, res) => {
         departments: '/api/departments',
         doctors: '/api/doctors',
         availability: '/api/availability',
+        appointments: '/api/appointments',
       },
     },
     timestamp: new Date().toISOString(),

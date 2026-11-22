@@ -241,3 +241,36 @@ export const patientProfileCreateSchema = z.object({
   }),
   address: addressSchema,
 });
+
+export const appointmentTypes = ['ROUTINE', 'EMERGENCY', 'FOLLOW_UP', 'TELEMEDICINE'] as const;
+export const appointmentStatuses = [
+  'PENDING',
+  'CONFIRMED',
+  'IN_PROGRESS',
+  'COMPLETED',
+  'CANCELLED',
+  'NO_SHOW',
+] as const;
+
+export const appointmentCreateSchema = z
+  .object({
+    hospitalId: z.string().min(1, 'Hospital ID is required'),
+    patientId: z.string().min(1, 'Patient ID is required'),
+    doctorId: z.string().min(1, 'Doctor ID is required'),
+    departmentId: z.string().min(1, 'Department ID is required').optional(),
+    startTime: z.coerce.date(),
+    endTime: z.coerce.date(),
+    type: z.enum(appointmentTypes).default('ROUTINE'),
+    isEmergency: z.boolean().default(false),
+    reason: z.string().trim().max(500).optional(),
+  })
+  .refine((data) => data.startTime < data.endTime, {
+    message: 'Appointment end time must be after start time',
+    path: ['endTime'],
+  });
+
+export const appointmentStatusUpdateSchema = z.object({
+  status: z.enum(appointmentStatuses),
+  reason: z.string().trim().max(500).optional(),
+  cancellationReason: z.string().trim().max(500).optional(),
+});

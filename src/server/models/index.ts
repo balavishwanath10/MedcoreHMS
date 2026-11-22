@@ -5,3 +5,4 @@ export * from './DoctorProfile.js';
 export * from './PatientProfile.js';
 export * from './RefreshToken.js';
 export * from './DoctorAvailability.js';
+export * from './Appointment.js';
