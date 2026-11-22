@@ -43,8 +43,20 @@ describe('Day 9: Appointment Booking Engine & Concurrency Conflict Prevention Te
   const futureEndDate = new Date(futureDate);
   futureEndDate.setMinutes(futureEndDate.getMinutes() + 30);
 
+  const createMockSession = () => ({
+    startTransaction: vi.fn(),
+    commitTransaction: vi.fn().mockResolvedValue(undefined),
+    abortTransaction: vi.fn().mockResolvedValue(undefined),
+    endSession: vi.fn().mockResolvedValue(undefined),
+    inTransaction: () => true,
+  });
+
   beforeEach(() => {
     vi.restoreAllMocks();
+    vi.spyOn(mongoose, 'startSession').mockImplementation(async () => createMockSession() as any);
+    vi.spyOn(DoctorProfile, 'updateOne').mockResolvedValue({} as any);
+    vi.spyOn(PatientProfile, 'updateMany').mockResolvedValue({} as any);
+    vi.spyOn(PatientProfile, 'updateOne').mockResolvedValue({} as any);
   });
 
   // =========================================================================
@@ -224,6 +236,168 @@ describe('Day 9: Appointment Booking Engine & Concurrency Conflict Prevention Te
         body: {
           patientId: patient1ProfileId,
           doctorId: doctor2ProfileId, // Attempt with Doctor 2 at same time
+          startTime: futureDate.toISOString(),
+          endTime: futureEndDate.toISOString(),
+        },
+      });
+
+      expect(res.statusCode).toBe(409);
+      expect(res.body.success).toBe(false);
+      expect(res.body.error.code).toBe('PATIENT_OVERLAPPING_APPOINTMENT');
+    });
+
+    it('[Mocked Controller Test] should safely reject booking with 503 if database transactions are unavailable (no non-transactional fallback)', async () => {
+      const patientToken = createToken('PATIENT', hospitalAId, patient1UserId);
+
+      vi.spyOn(PatientProfile, 'findOne').mockResolvedValue({
+        _id: new mongoose.Types.ObjectId(patient1ProfileId),
+        userId: new mongoose.Types.ObjectId(patient1UserId),
+        hospitalId: new mongoose.Types.ObjectId(hospitalAId),
+      } as any);
+
+      vi.spyOn(DoctorProfile, 'findOne').mockResolvedValue({
+        _id: new mongoose.Types.ObjectId(doctor1ProfileId),
+        hospitalId: new mongoose.Types.ObjectId(hospitalAId),
+        departmentId: new mongoose.Types.ObjectId(),
+      } as any);
+
+      vi.spyOn(DoctorAvailability, 'find').mockResolvedValue([
+        {
+          dayOfWeek: futureDate.getDay(),
+          startTime: '08:00',
+          endTime: '18:00',
+          isAvailable: true,
+        } as any,
+      ]);
+
+      // Simulate transaction capability completely unavailable
+      vi.spyOn(mongoose, 'startSession').mockRejectedValue(
+        new Error('Transactions not supported on standalone server'),
+      );
+
+      const res = await makeRequest(app, {
+        method: 'POST',
+        url: '/api/appointments',
+        headers: { authorization: `Bearer ${patientToken}` },
+        body: {
+          patientId: patient1ProfileId,
+          doctorId: doctor1ProfileId,
+          startTime: futureDate.toISOString(),
+          endTime: futureEndDate.toISOString(),
+        },
+      });
+
+      expect(res.statusCode).toBe(503);
+      expect(res.body.success).toBe(false);
+      expect(res.body.error.code).toBe('TRANSACTION_UNAVAILABLE');
+    });
+
+    it('[Mocked Controller Test] should reject booking when partial interval overlap detected for doctor', async () => {
+      const patientToken = createToken('PATIENT', hospitalAId, patient1UserId);
+
+      vi.spyOn(PatientProfile, 'findOne').mockResolvedValue({
+        _id: new mongoose.Types.ObjectId(patient1ProfileId),
+        userId: new mongoose.Types.ObjectId(patient1UserId),
+        hospitalId: new mongoose.Types.ObjectId(hospitalAId),
+      } as any);
+
+      vi.spyOn(DoctorProfile, 'findOne').mockResolvedValue({
+        _id: new mongoose.Types.ObjectId(doctor1ProfileId),
+        hospitalId: new mongoose.Types.ObjectId(hospitalAId),
+        departmentId: new mongoose.Types.ObjectId(),
+      } as any);
+
+      vi.spyOn(DoctorAvailability, 'find').mockResolvedValue([
+        {
+          dayOfWeek: futureDate.getDay(),
+          startTime: '08:00',
+          endTime: '18:00',
+          isAvailable: true,
+        } as any,
+      ]);
+
+      // Query returns an existing overlapping appointment for this doctor
+      (vi.spyOn(Appointment, 'findOne') as any).mockImplementation(async (query: any) => {
+        if (query.doctorId) {
+          return {
+            _id: new mongoose.Types.ObjectId(),
+            doctorId: new mongoose.Types.ObjectId(doctor1ProfileId),
+            startTime: futureDate,
+            endTime: futureEndDate,
+          } as any;
+        }
+        return null;
+      });
+
+      const res = await makeRequest(app, {
+        method: 'POST',
+        url: '/api/appointments',
+        headers: { authorization: `Bearer ${patientToken}` },
+        body: {
+          patientId: patient1ProfileId,
+          doctorId: doctor1ProfileId,
+          startTime: futureDate.toISOString(),
+          endTime: futureEndDate.toISOString(),
+        },
+      });
+
+      expect(res.statusCode).toBe(409);
+      expect(res.body.success).toBe(false);
+      expect(res.body.error.code).toBe('DOCTOR_DOUBLE_BOOKING');
+    });
+
+    it('[Mocked Controller Test] should reject cross-profile booking when sibling patient profile under same user account has overlapping appointment', async () => {
+      const patientToken = createToken('PATIENT', hospitalAId, patient1UserId);
+      const siblingProfileId = new mongoose.Types.ObjectId().toString();
+
+      vi.spyOn(PatientProfile, 'findOne').mockResolvedValue({
+        _id: new mongoose.Types.ObjectId(patient1ProfileId),
+        userId: new mongoose.Types.ObjectId(patient1UserId),
+        hospitalId: new mongoose.Types.ObjectId(hospitalAId),
+      } as any);
+
+      vi.spyOn(DoctorProfile, 'findOne').mockResolvedValue({
+        _id: new mongoose.Types.ObjectId(doctor1ProfileId),
+        hospitalId: new mongoose.Types.ObjectId(hospitalAId),
+        departmentId: new mongoose.Types.ObjectId(),
+      } as any);
+
+      vi.spyOn(DoctorAvailability, 'find').mockResolvedValue([
+        {
+          dayOfWeek: futureDate.getDay(),
+          startTime: '08:00',
+          endTime: '18:00',
+          isAvailable: true,
+        } as any,
+      ]);
+
+      // Patient has sibling profiles under the same account
+      vi.spyOn(PatientProfile, 'find').mockResolvedValue([
+        { _id: new mongoose.Types.ObjectId(patient1ProfileId) } as any,
+        { _id: new mongoose.Types.ObjectId(siblingProfileId) } as any,
+      ]);
+
+      // Query returns an existing overlapping appointment for the sibling profile
+      (vi.spyOn(Appointment, 'findOne') as any).mockImplementation(async (query: any) => {
+        if (query.patientId && query.patientId.$in) {
+          return {
+            _id: new mongoose.Types.ObjectId(),
+            patientId: new mongoose.Types.ObjectId(siblingProfileId),
+            doctorId: new mongoose.Types.ObjectId(doctor2ProfileId),
+            startTime: futureDate,
+            endTime: futureEndDate,
+          } as any;
+        }
+        return null;
+      });
+
+      const res = await makeRequest(app, {
+        method: 'POST',
+        url: '/api/appointments',
+        headers: { authorization: `Bearer ${patientToken}` },
+        body: {
+          patientId: patient1ProfileId,
+          doctorId: doctor1ProfileId,
           startTime: futureDate.toISOString(),
           endTime: futureEndDate.toISOString(),
         },

@@ -64,8 +64,20 @@ All unit and integration tests (166 of 166 tests across 15 test files) pass clea
      - When SMTP or Twilio environment variables are unconfigured, `notificationService` returns `{ sent: false, provider: 'DEV_MOCK_UNCONFIGURED' }` and `{ sent: false, provider: 'TWILIO_MOCK_UNCONFIGURED' }`.
      - Delivery is never falsely claimed when real transports do not exist.
      - Phone numbers and email addresses are masked in logs to avoid PII exposure.
-   - Queue Architecture:
-     - BullMQ and Redis are not present in project dependencies. Asynchronous execution is handled via non-blocking promises in `notificationService.dispatchAppointmentReminder` with safe error capture.
+   - Queue Architecture & Infrastructure Status:
+     - BullMQ and Redis are verified as not configured / uninstalled in the application environment (`hasBullMQ: false`).
+     - Real-world scheduling is implemented via the in-process `reminderScheduler` service (`src/server/services/reminderScheduler.service.ts`).
+     - Features:
+       - Calculates exact delivery delays for 24-hour and 1-hour intervals:
+         $$delay_{24h} = startTime - 24h - now$$
+         $$delay_{1h} = startTime - 1h - now$$
+       - Past/immediate intervals (consultation in < 24h or < 1h) are scheduled immediately or safely logged without crashing.
+       - Duplicate Prevention: Maintains an internal job registry (`appointmentId:reminderType`), suppressing duplicate schedules.
+       - Lifecycle Synchronization:
+         - Automatically clears active timers and cancels pending reminders when an appointment is cancelled (`cancelAppointmentReminders`).
+         - Reschedules reminders when an appointment time is updated (`rescheduleAppointmentReminders`).
+       - Diagnostic reporting via `reminderScheduler.getQueueStatus()` clearly reports:
+         `{ hasBullMQ: false, mode: 'IN_PROCESS_SCHEDULER', activeJobs: [...] }`.
 
 5. **Emergency Booking Workflow**:
    - Identified by `isEmergency: true` or `type: 'EMERGENCY'`.
@@ -105,11 +117,16 @@ All unit and integration tests (166 of 166 tests across 15 test files) pass clea
 
 ## 5. Verification Results
 
-All 13 integration tests in `tests/integration/appointment-lifecycle-day10.test.ts` pass cleanly, covering:
+All 18 integration tests in `tests/integration/appointment-lifecycle-day10.test.ts` pass cleanly, covering:
 - Permitted transitions (`PENDING -> CONFIRMED -> IN_PROGRESS -> COMPLETED`).
 - Invalid transition rejections (`COMPLETED -> IN_PROGRESS`, `PENDING -> COMPLETED`).
 - Cancellation with mandatory reason.
 - No-show auditing.
 - Role authorization enforcement (Patient self-cancellation, Receptionist restriction from completing).
 - Emergency booking shift bypass.
-- Reminder dispatch abstraction evaluation with failure isolation.
+- Reminder scheduling for 24-hour and 1-hour intervals.
+- Duplicate schedule suppression and timer registration.
+- Reminder cancellation on appointment cancellation.
+- Reminder rescheduling on appointment time update.
+- Channel isolation between email and SMS transports.
+- BullMQ / Redis missing infrastructure diagnostic reporting (`hasBullMQ: false`).

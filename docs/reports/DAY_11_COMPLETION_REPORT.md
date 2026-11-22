@@ -17,7 +17,7 @@ In strict compliance with medical legal requirements and PRD v1.0 specifications
 2. **Finalized Immutability**: Once an encounter is finalized and signed by an attending physician (`SIGNED`), direct updates are rejected with `400 ENCOUNTER_IMMUTABLE`. Subsequent corrections must be recorded as append-only addenda (`POST /api/encounters/:id/addendum`) with mandatory amendment reasons, transitioning the status to `AMENDED`.
 3. **No Deletions**: There is no delete endpoint for clinical encounters. Records are permanently preserved.
 
-All verification checks passed: 166 of 166 Vitest tests across 15 test files, zero TypeScript errors across server and client configs, strict Prettier formatting conformance, and unified production bundle builds.
+All verification checks passed: 175 of 175 Vitest tests across 15 test files, zero TypeScript errors across server and client configs, strict Prettier formatting conformance, and unified production bundle builds.
 
 ---
 
@@ -87,13 +87,14 @@ All verification checks passed: 166 of 166 Vitest tests across 15 test files, ze
 
 ## 4. Verification Results
 
-All 13 integration tests in `tests/integration/emr-encounters-day11.test.ts` pass cleanly, covering:
+All 14 integration tests in `tests/integration/emr-encounters-day11.test.ts` pass cleanly, covering:
 - Live vitals enrichment (BMI, categorization, abnormal flags).
 - Validation rejection of impossible vitals values.
 - Encounter creation with enriched vitals.
 - RBAC and cross-tenant isolation enforcement.
 - Open encounter update with revision recording and previous snapshot preservation.
 - Multiple sequential revisions proving historical data retention.
+- Rejection of clinical corrections without mandatory `reasonForChange` (`min(3)` validation).
 - Rejection of direct edits on signed records (`ENCOUNTER_IMMUTABLE`).
 - Signing role restrictions (Doctor allowed, Nurse rejected).
 - Addendum appending on signed encounters with status transition to `AMENDED`.

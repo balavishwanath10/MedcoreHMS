@@ -71,21 +71,39 @@ export const notificationService = {
     let emailDelivered = false;
     let smsDelivered = false;
 
+    // Failure isolation: Email channel
     if (params.recipientEmail) {
-      const emailRes = await this.sendEmail({
-        to: params.recipientEmail,
-        subject: `Appointment Reminder (${params.reminderType === '24_HOUR' ? 'Tomorrow' : 'In 1 Hour'})`,
-        text: `Your consultation is scheduled for ${params.appointmentTime.toISOString()}.`,
-      });
-      emailDelivered = emailRes.sent;
+      try {
+        const emailRes = await this.sendEmail({
+          to: params.recipientEmail,
+          subject: `Appointment Reminder (${params.reminderType === '24_HOUR' ? 'Tomorrow' : 'In 1 Hour'})`,
+          text: `Your consultation is scheduled for ${params.appointmentTime.toISOString()}.`,
+        });
+        emailDelivered = emailRes.sent;
+      } catch (emailErr: any) {
+        logger.error('Email provider error during reminder dispatch (channel isolated)', {
+          appointmentId: params.appointmentId,
+          error: emailErr.message,
+        });
+        emailDelivered = false;
+      }
     }
 
+    // Failure isolation: SMS channel
     if (params.recipientPhone) {
-      const smsRes = await this.sendSms({
-        to: params.recipientPhone,
-        message: `MedCoreHMS Reminder: Your appointment is scheduled for ${params.appointmentTime.toLocaleTimeString()}.`,
-      });
-      smsDelivered = smsRes.sent;
+      try {
+        const smsRes = await this.sendSms({
+          to: params.recipientPhone,
+          message: `MedCoreHMS Reminder: Your appointment is scheduled for ${params.appointmentTime.toLocaleTimeString()}.`,
+        });
+        smsDelivered = smsRes.sent;
+      } catch (smsErr: any) {
+        logger.error('SMS provider error during reminder dispatch (channel isolated)', {
+          appointmentId: params.appointmentId,
+          error: smsErr.message,
+        });
+        smsDelivered = false;
+      }
     }
 
     logger.info('Appointment reminder dispatch evaluated', {

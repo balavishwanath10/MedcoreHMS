@@ -7,6 +7,7 @@ import { Appointment } from '../../src/server/models/Appointment.js';
 import { DoctorProfile } from '../../src/server/models/DoctorProfile.js';
 import { PatientProfile } from '../../src/server/models/PatientProfile.js';
 import { notificationService } from '../../src/server/services/notification.service.js';
+import { reminderScheduler } from '../../src/server/services/reminderScheduler.service.js';
 import { UserRole } from '../../src/shared/types/index.js';
 
 describe('Day 10: Appointment Lifecycle, Transitions & Emergency Bookings Integration Tests', () => {
@@ -33,8 +34,21 @@ describe('Day 10: Appointment Lifecycle, Transitions & Emergency Bookings Integr
     });
   };
 
+  const createMockSession = () => ({
+    startTransaction: vi.fn(),
+    commitTransaction: vi.fn().mockResolvedValue(undefined),
+    abortTransaction: vi.fn().mockResolvedValue(undefined),
+    endSession: vi.fn().mockResolvedValue(undefined),
+    inTransaction: () => true,
+  });
+
   beforeEach(() => {
     vi.restoreAllMocks();
+    reminderScheduler.clearAll();
+    vi.spyOn(mongoose, 'startSession').mockImplementation(async () => createMockSession() as any);
+    vi.spyOn(DoctorProfile, 'updateOne').mockResolvedValue({} as any);
+    vi.spyOn(PatientProfile, 'updateMany').mockResolvedValue({} as any);
+    vi.spyOn(PatientProfile, 'updateOne').mockResolvedValue({} as any);
   });
 
   // =========================================================================
@@ -406,23 +420,124 @@ describe('Day 10: Appointment Lifecycle, Transitions & Emergency Bookings Integr
   });
 
   // =========================================================================
-  // 6. Reminder Service Evaluation
+  // 6. Reminder Service & Scheduler Evaluation
   // =========================================================================
-  describe('Appointment Reminder Service', () => {
-    it('should safely evaluate appointment reminder delivery abstraction', async () => {
-      const reminderSpy = vi.spyOn(notificationService, 'dispatchAppointmentReminder');
+  describe('Appointment Reminder Service & Scheduler', () => {
+    it('should schedule both 24-hour and 1-hour reminders for future appointments without immediate invocation', () => {
+      const futureAppt = new Date(Date.now() + 48 * 60 * 60 * 1000); // 48h in future
+
+      const scheduleResult = reminderScheduler.scheduleAppointmentReminders({
+        appointmentId,
+        appointmentTime: futureAppt,
+        recipientEmail: 'patient@example.com',
+        recipientPhone: '+15551234567',
+      });
+
+      expect(scheduleResult.scheduledCount).toBe(2);
+      const jobs = reminderScheduler.getJobs(appointmentId);
+      expect(jobs).toHaveLength(2);
+
+      const job24h = jobs.find((j) => j.reminderType === '24_HOUR');
+      const job1h = jobs.find((j) => j.reminderType === '1_HOUR');
+
+      expect(job24h).toBeDefined();
+      expect(job24h!.status).toBe('SCHEDULED');
+      expect(job24h!.timer).toBeDefined();
+
+      expect(job1h).toBeDefined();
+      expect(job1h!.status).toBe('SCHEDULED');
+      expect(job1h!.timer).toBeDefined();
+    });
+
+    it('should prevent duplicate reminder scheduling for the same appointment and window', () => {
+      const futureAppt = new Date(Date.now() + 48 * 60 * 60 * 1000);
+
+      // First scheduling
+      reminderScheduler.scheduleAppointmentReminders({
+        appointmentId,
+        appointmentTime: futureAppt,
+        recipientEmail: 'patient@example.com',
+      });
+
+      // Second identical scheduling attempt
+      reminderScheduler.scheduleAppointmentReminders({
+        appointmentId,
+        appointmentTime: futureAppt,
+        recipientEmail: 'patient@example.com',
+      });
+
+      const jobs = reminderScheduler.getJobs(appointmentId);
+      // Still only 2 jobs total (no duplicate entries)
+      expect(jobs).toHaveLength(2);
+    });
+
+    it('should cancel pending reminders and clear timers when appointment is cancelled', () => {
+      const futureAppt = new Date(Date.now() + 48 * 60 * 60 * 1000);
+
+      reminderScheduler.scheduleAppointmentReminders({
+        appointmentId,
+        appointmentTime: futureAppt,
+        recipientEmail: 'patient@example.com',
+      });
+
+      const cancelResult = reminderScheduler.cancelAppointmentReminders(
+        appointmentId,
+        'Patient requested cancellation',
+      );
+
+      expect(cancelResult.cancelledCount).toBe(2);
+      const jobs = reminderScheduler.getJobs(appointmentId);
+      expect(jobs.every((j) => j.status === 'CANCELLED')).toBe(true);
+      expect(jobs.every((j) => j.timer === null)).toBe(true);
+    });
+
+    it('should reschedule reminders when appointment time is updated', () => {
+      const originalTime = new Date(Date.now() + 48 * 60 * 60 * 1000);
+      const newTime = new Date(Date.now() + 72 * 60 * 60 * 1000);
+
+      reminderScheduler.scheduleAppointmentReminders({
+        appointmentId,
+        appointmentTime: originalTime,
+        recipientEmail: 'patient@example.com',
+      });
+
+      reminderScheduler.rescheduleAppointmentReminders({
+        appointmentId,
+        newAppointmentTime: newTime,
+        recipientEmail: 'patient@example.com',
+      });
+
+      const jobs = reminderScheduler.getJobs(appointmentId);
+      const activeJobs = jobs.filter((j) => j.status === 'SCHEDULED');
+      expect(activeJobs).toHaveLength(2);
+      expect(activeJobs[0].appointmentTime.getTime()).toBe(newTime.getTime());
+    });
+
+    it('should isolate email failure so it does not abort SMS delivery', async () => {
+      // Mock sendEmail to throw error
+      vi.spyOn(notificationService, 'sendEmail').mockRejectedValue(
+        new Error('SMTP connection timeout'),
+      );
+      // Mock sendSms to succeed with unconfigured mock
+      const smsSpy = vi.spyOn(notificationService, 'sendSms');
 
       const result = await notificationService.dispatchAppointmentReminder({
-        appointmentId: appointmentId,
-        recipientEmail: 'patient@example.com',
+        appointmentId,
+        recipientEmail: 'fail@example.com',
         recipientPhone: '+15551234567',
         appointmentTime: new Date(),
         reminderType: '24_HOUR',
       });
 
-      expect(reminderSpy).toHaveBeenCalled();
-      expect(result).toHaveProperty('emailDelivered');
-      expect(result).toHaveProperty('smsDelivered');
+      expect(result.emailDelivered).toBe(false);
+      expect(smsSpy).toHaveBeenCalled();
+    });
+
+    it('should accurately report BullMQ/Redis infrastructure readiness', () => {
+      const report = reminderScheduler.getInfrastructureReport();
+      expect(report.hasBullMQ).toBe(false);
+      expect(report.engine).toBe('IN_PROCESS_MANAGED_SCHEDULER');
+      expect(report.message).toContain('BullMQ');
     });
   });
 });

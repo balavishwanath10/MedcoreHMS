@@ -368,7 +368,11 @@ export const encounterUpdateSchema = z.object({
   assessment: z.string().trim().max(5000).optional(),
   diagnoses: z.array(diagnosisSchema).optional(),
   treatmentPlan: treatmentPlanSchema.optional(),
-  reasonForChange: z.string().trim().max(500).optional(),
+  reasonForChange: z
+    .string({ required_error: 'A non-empty reason for clinical correction is mandatory' })
+    .trim()
+    .min(3, 'Reason for correction must be at least 3 characters')
+    .max(500),
 });
 
 export const encounterAddendumSchema = z.object({

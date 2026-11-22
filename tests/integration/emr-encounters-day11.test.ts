@@ -272,6 +272,35 @@ describe('Day 11: EMR Encounters, Vitals & Immutability Integration Tests', () =
       expect(mockEncounter.chiefComplaint).toBe('Second revision text');
     });
 
+    it('CRITICAL APPEND-ONLY AUDIT: should reject clinical correction without mandatory reasonForChange', async () => {
+      const doctorToken = createToken(ROLES.DOCTOR);
+
+      const mockEncounter: any = {
+        _id: encounterId,
+        hospitalId: hospitalAId,
+        status: 'OPEN',
+        chiefComplaint: 'Original baseline',
+        revisions: [],
+        save: vi.fn(),
+      };
+
+      (vi.spyOn(Encounter, 'findOne') as any).mockResolvedValue(mockEncounter);
+
+      const res = await makeRequest(app, {
+        method: 'PUT',
+        url: `/api/encounters/${encounterId}`,
+        headers: { authorization: `Bearer ${doctorToken}` },
+        body: {
+          chiefComplaint: 'Attempted change without reason',
+        },
+      });
+
+      expect(res.statusCode).toBe(400);
+      expect(res.body.success).toBe(false);
+      expect(res.body.error.code).toBe('VALIDATION_ERROR');
+      expect(mockEncounter.save).not.toHaveBeenCalled();
+    });
+
     it('CRITICAL IMMUTABILITY: should reject direct modification of a SIGNED encounter', async () => {
       const doctorToken = createToken(ROLES.DOCTOR);
 
@@ -291,6 +320,7 @@ describe('Day 11: EMR Encounters, Vitals & Immutability Integration Tests', () =
         headers: { authorization: `Bearer ${doctorToken}` },
         body: {
           chiefComplaint: 'Attempted overwrite of signed record',
+          reasonForChange: 'Attempted edit on signed record',
         },
       });
 

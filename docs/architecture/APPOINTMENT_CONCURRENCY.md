@@ -106,21 +106,21 @@ appointmentSchema.index({
 Exact-match unique indexes only catch collisions when two requests specify identical `startTime`. To prevent partial interval overlaps (e.g. 09:15–09:45 colliding with 09:00–09:30):
 
 1. **Transactional Serialization**:
-   Within a MongoDB multi-document transaction (`session.startTransaction()`), the booking controller issues an atomic update to both the doctor and patient records:
+   Within a MongoDB multi-document transaction (`session.startTransaction()`), the booking controller issues an atomic update to both the doctor and all patient records associated with the patient account:
    ```typescript
    await DoctorProfile.updateOne(
-     { _id: validated.doctorId },
+     { _id: validated.doctorId, hospitalId: userHospitalId },
      { $inc: { bookingLockVersion: 1 } },
      { session }
    );
-   await PatientProfile.updateOne(
-     { _id: validated.patientId },
+   await PatientProfile.updateMany(
+     { userId: patient.userId, hospitalId: userHospitalId },
      { $inc: { bookingLockVersion: 1 } },
      { session }
    );
    ```
 2. **Write Lock Effect**:
-   MongoDB's WiredTiger engine acquires an exclusive document write lock on the target `DoctorProfile` and `PatientProfile`. Any concurrent booking attempt for the same doctor or patient is forced to wait or abort with `WriteConflict`.
+   MongoDB's WiredTiger engine acquires an exclusive document write lock on the target `DoctorProfile` and all sibling `PatientProfile`s. Any concurrent booking attempt for the same doctor or patient account is forced to wait or abort with `WriteConflict`.
 3. **Serialized Interval Evaluation**:
    Under this exclusive lock, the interval query executes:
    $$\text{Overlap Condition: } (\text{startTime} < \text{req.endTime}) \land (\text{endTime} > \text{req.startTime})$$
@@ -145,12 +145,13 @@ In a multi-hospital system, a single patient user may hold multiple patient prof
 
 ---
 
-### Layer 4: Duplicate-Key and Transient Conflict Handling
+### Layer 4: Bounded Retries, Transient Conflict Handling & Strict Non-Fallback
 
 When concurrent requests race at the database engine level:
-- Code `11000` (`MongoServerError`) is caught and classified by key pattern (`doctorId` -> `DOCTOR_DOUBLE_BOOKING`, `patientId` -> `PATIENT_OVERLAPPING_APPOINTMENT`).
-- Transactions are cleanly aborted via `session.abortTransaction()` in error blocks, leaving no phantom locks or orphaned reservations.
-- If running in standalone or mock environments where transactions are unavailable, the engine falls back gracefully to atomic interval verification with clear diagnostic logging.
+- **Bounded Retry for Transient Errors:** If WiredTiger encounters a `TransientTransactionError` or `WriteConflict`, the controller automatically retries the transaction up to 3 times with exponential backoff and jitter (`attempt * 50ms`), preventing false failures under high concurrency.
+- **Duplicate Key Trapping:** Code `11000` (`MongoServerError`) is caught and classified by key pattern (`doctorId` -> `DOCTOR_DOUBLE_BOOKING`, `patientId` -> `PATIENT_OVERLAPPING_APPOINTMENT`).
+- **Clean Abort:** Transactions are cleanly aborted via `session.abortTransaction()` in error blocks, leaving no phantom locks or orphaned reservations.
+- **Strict Non-Fallback Policy:** If MongoDB transactions or sessions are unavailable, the engine **strictly rejects the booking** with `503 TRANSACTION_UNAVAILABLE`. There is **no unsafe non-transactional fallback** that would allow uncoordinated double-bookings.
 
 ---
 
