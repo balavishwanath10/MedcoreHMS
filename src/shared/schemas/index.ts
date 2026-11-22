@@ -639,3 +639,46 @@ export const labResultReviewSchema = z
     message: 'A mandatory reason of at least 3 characters is required to reject a lab result',
     path: ['reason'],
   });
+
+// ==========================================
+// Pharmacy & Inventory Schemas (Day 17)
+// ==========================================
+
+export const batchStatuses = ['ACTIVE', 'EXPIRED', 'QUARANTINED', 'DEPLETED'] as const;
+
+export const inventoryBatchCreateSchema = z.object({
+  hospitalId: z.string().optional(),
+  medicineId: z.string().min(1, 'Medicine ID is required'),
+  batchNumber: z.string().trim().min(1, 'Batch number is required').max(100),
+  expiryDate: z.coerce.date({ required_error: 'Valid expiry date is required' }),
+  manufactureDate: z.coerce.date().optional(),
+  quantityReceived: z.number().int().min(1, 'Quantity received must be at least 1'),
+  quantityAvailable: z.number().int().min(0).optional(),
+  unitCost: z.number().min(0, 'Unit cost cannot be negative'),
+  mrp: z.number().min(0, 'MRP cannot be negative'),
+  reorderThreshold: z.number().int().min(0).default(20),
+  locationRack: z.string().trim().max(100).optional(),
+  supplier: z.string().trim().max(200).optional(),
+});
+
+export const inventoryBatchUpdateSchema = z.object({
+  unitCost: z.number().min(0).optional(),
+  mrp: z.number().min(0).optional(),
+  reorderThreshold: z.number().int().min(0).optional(),
+  locationRack: z.string().trim().max(100).optional(),
+  status: z.enum(batchStatuses).optional(),
+});
+
+export const dispenseItemInputSchema = z.object({
+  medicineId: z.string().min(1, 'Medicine ID is required'),
+  quantity: z.number().int().min(1, 'Quantity to dispense must be at least 1'),
+});
+
+export const dispensePrescriptionSchema = z.object({
+  items: z.array(dispenseItemInputSchema).optional(),
+  notes: z.string().trim().max(1000).optional(),
+});
+
+export const batchQuarantineSchema = z.object({
+  reason: z.string().trim().min(3, 'Quarantine reason must be at least 3 characters').max(500),
+});

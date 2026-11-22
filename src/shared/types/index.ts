@@ -539,3 +539,59 @@ export interface ILabResult {
   createdAt?: string | Date;
   updatedAt?: string | Date;
 }
+
+// ==========================================
+// Pharmacy & Inventory Management Types (Day 17)
+// ==========================================
+
+export type BatchStatus = 'ACTIVE' | 'EXPIRED' | 'QUARANTINED' | 'DEPLETED';
+
+export interface IInventoryBatch {
+  _id?: string;
+  hospitalId: string;
+  medicineId: string;
+  medicineName?: string;
+  batchNumber: string;
+  expiryDate: string | Date;
+  manufactureDate?: string | Date;
+  quantityReceived: number;
+  quantityAvailable: number;
+  unitCost: number;
+  mrp: number;
+  status: BatchStatus;
+  reorderThreshold: number;
+  locationRack?: string;
+  supplier?: string;
+  isDeleted: boolean;
+  createdAt?: string | Date;
+  updatedAt?: string | Date;
+}
+
+export interface IDispensedBatchAllocation {
+  batchId: string;
+  batchNumber: string;
+  quantity: number;
+  unitCost: number;
+  mrp: number;
+  expiryDate: string | Date;
+}
+
+export interface IDispenseItemResult {
+  medicineId: string;
+  medicineName: string;
+  requestedQuantity: number;
+  dispensedQuantity: number;
+  allocatedBatches: IDispensedBatchAllocation[];
+  totalItemPrice: number;
+}
+
+export interface IDispenseReceipt {
+  prescriptionId: string;
+  patientId: string;
+  hospitalId: string;
+  dispensedBy: string;
+  dispensedAt: string | Date;
+  items: IDispenseItemResult[];
+  grandTotal: number;
+  notes?: string;
+}

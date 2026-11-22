@@ -17,3 +17,4 @@ export * from './AuditLog.js';
 export * from './LabTest.js';
 export * from './LabOrder.js';
 export * from './LabResult.js';
+export * from './InventoryBatch.js';

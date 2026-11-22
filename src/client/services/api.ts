@@ -637,3 +637,108 @@ export async function fetchLabResultById(id: string): Promise<any> {
   }
   return result.data;
 }
+
+// =========================================================================
+// Day 17: Pharmacy Inventory & FIFO Dispensing APIs
+// =========================================================================
+
+export async function fetchBatches(params?: {
+  medicineId?: string;
+  status?: string;
+  expiringWithinDays?: number;
+}): Promise<any[]> {
+  const urlParams = new URLSearchParams();
+  if (params?.medicineId) urlParams.append('medicineId', params.medicineId);
+  if (params?.status) urlParams.append('status', params.status);
+  if (params?.expiringWithinDays)
+    urlParams.append('expiringWithinDays', String(params.expiringWithinDays));
+
+  const q = urlParams.toString() ? `?${urlParams.toString()}` : '';
+  const response = await fetch(`/api/pharmacy/batches${q}`, {
+    headers: { ...getAuthHeader(), 'Content-Type': 'application/json' },
+  });
+  const result: ApiResponse<any[]> = await response.json();
+  if (!result.success || !result.data) {
+    throw new Error(result.error?.message || 'Failed to fetch inventory batches');
+  }
+  return result.data;
+}
+
+export async function fetchExpiringBatches(days: number = 30): Promise<any[]> {
+  const response = await fetch(`/api/pharmacy/batches/expiring?days=${days}`, {
+    headers: { ...getAuthHeader(), 'Content-Type': 'application/json' },
+  });
+  const result: ApiResponse<any[]> = await response.json();
+  if (!result.success || !result.data) {
+    throw new Error(result.error?.message || 'Failed to fetch expiring batches');
+  }
+  return result.data;
+}
+
+export async function addInventoryBatch(data: any): Promise<any> {
+  const response = await fetch('/api/pharmacy/batches', {
+    method: 'POST',
+    headers: { ...getAuthHeader(), 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  });
+  const result: ApiResponse<any> = await response.json();
+  if (!result.success || !result.data) {
+    throw new Error(result.error?.message || 'Failed to add inventory batch');
+  }
+  return result.data;
+}
+
+export async function updateInventoryBatch(id: string, data: any): Promise<any> {
+  const response = await fetch(`/api/pharmacy/batches/${id}`, {
+    method: 'PATCH',
+    headers: { ...getAuthHeader(), 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  });
+  const result: ApiResponse<any> = await response.json();
+  if (!result.success || !result.data) {
+    throw new Error(result.error?.message || 'Failed to update inventory batch');
+  }
+  return result.data;
+}
+
+export async function quarantineBatch(id: string, reason: string): Promise<any> {
+  const response = await fetch(`/api/pharmacy/batches/${id}/quarantine`, {
+    method: 'PATCH',
+    headers: { ...getAuthHeader(), 'Content-Type': 'application/json' },
+    body: JSON.stringify({ reason }),
+  });
+  const result: ApiResponse<any> = await response.json();
+  if (!result.success || !result.data) {
+    throw new Error(result.error?.message || 'Failed to quarantine batch');
+  }
+  return result.data;
+}
+
+export async function scanAndExpireBatches(): Promise<any> {
+  const response = await fetch('/api/pharmacy/batches/scan-expired', {
+    method: 'POST',
+    headers: { ...getAuthHeader(), 'Content-Type': 'application/json' },
+    body: JSON.stringify({}),
+  });
+  const result: ApiResponse<any> = await response.json();
+  if (!result.success || !result.data) {
+    throw new Error(result.error?.message || 'Failed to scan and expire batches');
+  }
+  return result.data;
+}
+
+export async function dispensePrescription(
+  prescriptionId: string,
+  data?: { items?: any[]; notes?: string },
+): Promise<any> {
+  const response = await fetch(`/api/pharmacy/dispense/${prescriptionId}`, {
+    method: 'POST',
+    headers: { ...getAuthHeader(), 'Content-Type': 'application/json' },
+    body: JSON.stringify(data || {}),
+  });
+  const result: ApiResponse<any> = await response.json();
+  if (!result.success || !result.data) {
+    throw new Error(result.error?.message || 'Failed to dispense prescription');
+  }
+  return result.data;
+}
