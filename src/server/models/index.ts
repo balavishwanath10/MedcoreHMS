@@ -11,3 +11,6 @@ export * from './Allergy.js';
 export * from './Vaccination.js';
 export * from './FamilyHistory.js';
 export * from './ScheduledReminder.js';
+export * from './Medicine.js';
+export * from './Prescription.js';
+export * from './AuditLog.js';

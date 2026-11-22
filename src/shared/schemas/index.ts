@@ -423,3 +423,88 @@ export const familyHistoryCreateSchema = z.object({
   hasCardiacDisease: z.boolean().default(false),
   notes: z.string().trim().max(1000).optional(),
 });
+
+// =========================================================================
+// Day 13: Prescription & Medicine Schemas
+// =========================================================================
+export const medicineDosageForms = ['tablet', 'capsule', 'syrup', 'injection', 'topical'] as const;
+
+export const prescriptionFrequencies = ['OD', 'BD', 'TDS', 'QID', 'SOS'] as const;
+
+export const medicineCreateSchema = z.object({
+  hospitalId: z.string().min(1, 'Hospital ID is required'),
+  name: z.string().trim().min(1, 'Medicine name is required').max(200),
+  genericName: z.string().trim().min(1, 'Generic name is required').max(200),
+  category: z.string().trim().min(1, 'Category is required').max(100),
+  dosageForm: z.enum(medicineDosageForms, {
+    errorMap: () => ({
+      message: 'Dosage form must be tablet, capsule, syrup, injection, or topical',
+    }),
+  }),
+  strength: z.string().trim().min(1, 'Strength is required (e.g., 500mg)').max(100),
+  unitPrice: z.number().min(0, 'Unit price cannot be negative').default(0),
+  reorderLevel: z.number().int().min(0).default(50),
+  isActive: z.boolean().default(true),
+});
+
+export const prescriptionItemInputSchema = z
+  .object({
+    medicineId: z.string().optional(),
+    medicineName: z.string().trim().min(1, 'Medicine name is required').max(200),
+    genericName: z.string().trim().optional(),
+    form: z
+      .enum(medicineDosageForms, {
+        errorMap: () => ({
+          message: 'Form must be tablet, capsule, syrup, injection, or topical',
+        }),
+      })
+      .optional(),
+    dosageForm: z.enum(medicineDosageForms).optional(),
+    dosage: z.string().trim().min(1, 'Dosage is required (e.g., 500mg, 1 tablet)').max(100),
+    frequency: z.enum(prescriptionFrequencies, {
+      errorMap: () => ({
+        message: 'Frequency must be OD, BD, TDS, QID, or SOS',
+      }),
+    }),
+    durationDays: z
+      .number({ required_error: 'Duration in days is required' })
+      .int('Duration must be a whole number of days')
+      .min(1, 'Duration must be at least 1 day')
+      .max(365, 'Duration cannot exceed 365 days'),
+    instructions: z.string().trim().max(1000).optional(),
+    specialInstructions: z.string().trim().max(1000).optional(),
+  })
+  .refine((data) => data.form || data.dosageForm, {
+    message: 'Form must be tablet, capsule, syrup, injection, or topical',
+    path: ['form'],
+  })
+  .transform((data) => ({
+    ...data,
+    form: (data.form || data.dosageForm)!,
+    dosageForm: (data.dosageForm || data.form)!,
+    specialInstructions: data.specialInstructions || data.instructions,
+    instructions: data.instructions || data.specialInstructions,
+  }));
+
+export const prescriptionCreateSchema = z.object({
+  hospitalId: z.string().min(1, 'Hospital ID is required'),
+  patientId: z.string().min(1, 'Patient ID is required'),
+  doctorId: z.string().min(1, 'Doctor ID is required'),
+  encounterId: z.string().min(1, 'Encounter ID is required'),
+  diagnosis: z.string().trim().optional(),
+  items: z
+    .array(prescriptionItemInputSchema)
+    .min(1, 'At least one medicine item is required in a prescription'),
+  notes: z.string().trim().max(2000).optional(),
+});
+
+export const prescriptionAmendSchema = z.object({
+  items: z
+    .array(prescriptionItemInputSchema)
+    .min(1, 'At least one medicine item is required in the amended prescription'),
+  reason: z
+    .string({ required_error: 'A non-empty reason for amendment is mandatory' })
+    .trim()
+    .min(3, 'Amendment reason must be at least 3 characters')
+    .max(500),
+});

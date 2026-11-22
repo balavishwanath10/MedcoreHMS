@@ -286,6 +286,82 @@ export interface ITreatmentPlan {
   lifestyleRecommendations?: string[];
 }
 
+// =========================================================================
+// Day 13: Prescription & Medicine Types
+// =========================================================================
+export type MedicineDosageForm = 'tablet' | 'capsule' | 'syrup' | 'injection' | 'topical';
+export type PrescriptionFrequency = 'OD' | 'BD' | 'TDS' | 'QID' | 'SOS';
+export type PrescriptionStatus = 'ISSUED' | 'DISPENSED' | 'CANCELLED' | 'AMENDED';
+
+export interface IMedicine {
+  _id?: string;
+  hospitalId: string;
+  name: string;
+  genericName: string;
+  category: string;
+  dosageForm: MedicineDosageForm;
+  strength: string;
+  unitPrice: number;
+  reorderLevel: number;
+  isActive: boolean;
+  isDeleted: boolean;
+  createdAt?: string | Date;
+  updatedAt?: string | Date;
+}
+
+export interface IPrescriptionItem {
+  medicineId?: string;
+  medicineName: string;
+  form: MedicineDosageForm;
+  dosage: string;
+  frequency: PrescriptionFrequency;
+  durationDays: number;
+  specialInstructions?: string;
+}
+
+export interface IPrescriptionAmendment {
+  amendmentNumber: number;
+  previousItems: IPrescriptionItem[];
+  revisedItems: IPrescriptionItem[];
+  authorId: string;
+  authorRole: string;
+  authorName: string;
+  reason: string;
+  amendedAt: string | Date;
+}
+
+export interface IPrescription {
+  _id?: string;
+  hospitalId: string;
+  patientId: string;
+  doctorId: string;
+  encounterId: string;
+  items: IPrescriptionItem[];
+  notes?: string;
+  status: PrescriptionStatus;
+  signatureUrl?: string; // Digital signature asset URL
+  amendments?: IPrescriptionAmendment[];
+  issuedAt: string | Date;
+  isDeleted: boolean;
+  createdAt?: string | Date;
+  updatedAt?: string | Date;
+}
+
+export interface IAuditLog {
+  _id?: string;
+  hospitalId?: string | null;
+  userId: string;
+  userRole: string;
+  action: string;
+  entityType: string;
+  entityId: string;
+  ipAddress?: string;
+  userAgent?: string;
+  details?: Record<string, any>;
+  diff?: { before?: any; after?: any };
+  timestamp: string | Date;
+}
+
 export interface IAllergy {
   _id?: string;
   hospitalId: string;

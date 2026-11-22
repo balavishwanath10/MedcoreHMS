@@ -377,3 +377,80 @@ export async function fetchPatientTimeline(patientId: string): Promise<any> {
   }
   return result.data;
 }
+
+// =========================================================================
+// Day 13: Prescription & Medicine APIs
+// =========================================================================
+export async function searchMedicines(
+  searchTerm?: string,
+  category?: string,
+  form?: string,
+): Promise<any[]> {
+  const params = new URLSearchParams();
+  if (searchTerm) params.append('search', searchTerm);
+  if (category) params.append('category', category);
+  if (form) params.append('form', form);
+
+  const query = params.toString() ? `?${params.toString()}` : '';
+  const response = await fetch(`/api/medicines${query}`, {
+    headers: { ...getAuthHeader(), 'Content-Type': 'application/json' },
+  });
+  const result: ApiResponse<any[]> = await response.json();
+  if (!result.success || !result.data) {
+    throw new Error(result.error?.message || 'Failed to search medicine formulary');
+  }
+  return result.data;
+}
+
+export async function fetchPrescriptions(patientId?: string, encounterId?: string): Promise<any[]> {
+  const params = new URLSearchParams();
+  if (patientId) params.append('patientId', patientId);
+  if (encounterId) params.append('encounterId', encounterId);
+
+  const query = params.toString() ? `?${params.toString()}` : '';
+  const response = await fetch(`/api/prescriptions${query}`, {
+    headers: { ...getAuthHeader(), 'Content-Type': 'application/json' },
+  });
+  const result: ApiResponse<any[]> = await response.json();
+  if (!result.success || !result.data) {
+    throw new Error(result.error?.message || 'Failed to fetch prescriptions');
+  }
+  return result.data;
+}
+
+export async function fetchPrescriptionById(id: string): Promise<any> {
+  const response = await fetch(`/api/prescriptions/${id}`, {
+    headers: { ...getAuthHeader(), 'Content-Type': 'application/json' },
+  });
+  const result: ApiResponse<any> = await response.json();
+  if (!result.success || !result.data) {
+    throw new Error(result.error?.message || 'Failed to fetch prescription details');
+  }
+  return result.data;
+}
+
+export async function createPrescription(data: any): Promise<any> {
+  const response = await fetch('/api/prescriptions', {
+    method: 'POST',
+    headers: { ...getAuthHeader(), 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  });
+  const result: ApiResponse<any> = await response.json();
+  if (!result.success || !result.data) {
+    throw new Error(result.error?.message || 'Failed to issue prescription');
+  }
+  return result.data;
+}
+
+export async function amendPrescription(id: string, data: any): Promise<any> {
+  const response = await fetch(`/api/prescriptions/${id}/amend`, {
+    method: 'POST',
+    headers: { ...getAuthHeader(), 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  });
+  const result: ApiResponse<any> = await response.json();
+  if (!result.success || !result.data) {
+    throw new Error(result.error?.message || 'Failed to amend prescription');
+  }
+  return result.data;
+}

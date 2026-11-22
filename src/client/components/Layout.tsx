@@ -1,6 +1,6 @@
 import React from 'react';
 import { Link, useLocation } from 'react-router-dom';
-import { Activity, Shield, Server, Building2, Calendar, FileText, Home } from 'lucide-react';
+import { Activity, Shield, Server, Building2, Calendar, FileText, Home, Pill } from 'lucide-react';
 
 interface LayoutProps {
   children: React.ReactNode;
@@ -14,6 +14,7 @@ export const Layout: React.FC<LayoutProps> = ({ children }) => {
     { to: '/admin/hospitals', label: 'Hospital Governance', icon: Building2 },
     { to: '/appointments', label: 'Appointments & Schedules', icon: Calendar },
     { to: '/emr', label: 'EMR & Clinical Records', icon: FileText },
+    { to: '/prescriptions', label: 'Prescriptions & Rx', icon: Pill },
   ];
 
   return (
