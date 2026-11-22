@@ -682,3 +682,69 @@ export const dispensePrescriptionSchema = z.object({
 export const batchQuarantineSchema = z.object({
   reason: z.string().trim().min(3, 'Quarantine reason must be at least 3 characters').max(500),
 });
+
+// ==========================================
+// Billing, Invoices & Payment Schemas (Day 18)
+// ==========================================
+
+export const invoiceStatuses = [
+  'DRAFT',
+  'ISSUED',
+  'PAID',
+  'PARTIALLY_PAID',
+  'CANCELLED',
+  'VOID',
+] as const;
+
+export const invoiceLineItemTypes = [
+  'CONSULTATION',
+  'PHARMACY',
+  'LABORATORY',
+  'PROCEDURE',
+  'ROOM_BED',
+  'OTHER',
+] as const;
+
+export const paymentMethods = ['CASH', 'STRIPE', 'RAZORPAY', 'INSURANCE_TPA'] as const;
+
+export const paymentStatuses = ['PENDING', 'SUCCESS', 'FAILED'] as const;
+
+export const invoiceLineItemSchema = z.object({
+  itemType: z.enum(invoiceLineItemTypes),
+  description: z.string().trim().min(1, 'Description is required').max(200),
+  quantity: z.number().int().min(1, 'Quantity must be at least 1').default(1),
+  unitPrice: z.number().min(0, 'Unit price cannot be negative'),
+  amount: z.number().min(0).optional(),
+  referenceId: z.string().optional(),
+});
+
+export const tpaClaimSchema = z.object({
+  providerName: z.string().trim().min(1, 'Insurance provider name is required'),
+  policyNumber: z.string().trim().min(1, 'Policy number is required'),
+  preAuthCode: z.string().trim().optional(),
+  claimAmount: z.number().min(0, 'Claim amount cannot be negative'),
+  approvedAmount: z.number().min(0).optional(),
+  claimStatus: z.enum(['SUBMITTED', 'PRE_AUTHORIZED', 'SETTLED', 'REJECTED']).default('SUBMITTED'),
+  claimNotes: z.string().trim().max(1000).optional(),
+});
+
+export const invoiceCreateSchema = z.object({
+  hospitalId: z.string().optional(),
+  patientId: z.string().min(1, 'Patient ID is required'),
+  encounterId: z.string().optional(),
+  lineItems: z.array(invoiceLineItemSchema).min(1, 'Invoice must contain at least one line item'),
+  discountAmount: z.number().min(0).default(0),
+  taxRatePercent: z.number().min(0).max(100).default(5),
+  tpaClaim: tpaClaimSchema.optional(),
+  dueDate: z.coerce.date().optional(),
+});
+
+export const paymentRecordSchema = z.object({
+  paymentMethod: z.enum(paymentMethods),
+  amount: z.number().min(0.01, 'Payment amount must be greater than 0'),
+  currency: z.string().trim().default('USD'),
+  transactionReference: z.string().trim().optional(),
+  gatewayTransactionId: z.string().trim().optional(),
+  idempotencyKey: z.string().trim().optional(),
+  tpaClaim: tpaClaimSchema.optional(),
+});

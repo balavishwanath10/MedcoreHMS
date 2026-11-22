@@ -13,6 +13,7 @@ import { prescriptionRouter } from './prescription.routes.js';
 import { medicineRouter } from './medicine.routes.js';
 import { labRouter } from './lab.routes.js';
 import pharmacyRouter from './pharmacy.routes.js';
+import billingRouter from './billing.routes.js';
 
 export const apiRouter = Router();
 
@@ -70,6 +71,10 @@ apiRouter.use('/v1/lab', labRouter);
 // Mount Pharmacy Inventory & Dispensing routes under /api/pharmacy and /api/v1/pharmacy
 apiRouter.use('/pharmacy', pharmacyRouter);
 apiRouter.use('/v1/pharmacy', pharmacyRouter);
+
+// Mount Billing, Invoices & Payment routes under /api/billing and /api/v1/billing
+apiRouter.use('/billing', billingRouter);
+apiRouter.use('/v1/billing', billingRouter);
 
 // Base route for /api
 apiRouter.get('/', (_req, res) => {

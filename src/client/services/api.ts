@@ -742,3 +742,89 @@ export async function dispensePrescription(
   }
   return result.data;
 }
+
+// =========================================================================
+// Day 18: Billing, Invoices & Payment APIs
+// =========================================================================
+
+export async function fetchInvoices(params?: {
+  status?: string;
+  patientId?: string;
+  invoiceNumber?: string;
+}): Promise<any[]> {
+  const urlParams = new URLSearchParams();
+  if (params?.status) urlParams.append('status', params.status);
+  if (params?.patientId) urlParams.append('patientId', params.patientId);
+  if (params?.invoiceNumber) urlParams.append('invoiceNumber', params.invoiceNumber);
+
+  const q = urlParams.toString() ? `?${urlParams.toString()}` : '';
+  const response = await fetch(`/api/billing/invoices${q}`, {
+    headers: { ...getAuthHeader(), 'Content-Type': 'application/json' },
+  });
+  const result: ApiResponse<any[]> = await response.json();
+  if (!result.success || !result.data) {
+    throw new Error(result.error?.message || 'Failed to fetch invoices');
+  }
+  return result.data;
+}
+
+export async function fetchInvoiceById(id: string): Promise<any> {
+  const response = await fetch(`/api/billing/invoices/${id}`, {
+    headers: { ...getAuthHeader(), 'Content-Type': 'application/json' },
+  });
+  const result: ApiResponse<any> = await response.json();
+  if (!result.success || !result.data) {
+    throw new Error(result.error?.message || 'Failed to fetch invoice details');
+  }
+  return result.data;
+}
+
+export async function createInvoice(data: any): Promise<any> {
+  const response = await fetch('/api/billing/invoices', {
+    method: 'POST',
+    headers: { ...getAuthHeader(), 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  });
+  const result: ApiResponse<any> = await response.json();
+  if (!result.success || !result.data) {
+    throw new Error(result.error?.message || 'Failed to create invoice');
+  }
+  return result.data;
+}
+
+export async function generateInvoiceFromEncounter(encounterId: string): Promise<any> {
+  const response = await fetch(`/api/billing/invoices/generate-from-encounter/${encounterId}`, {
+    method: 'POST',
+    headers: { ...getAuthHeader(), 'Content-Type': 'application/json' },
+    body: JSON.stringify({}),
+  });
+  const result: ApiResponse<any> = await response.json();
+  if (!result.success || !result.data) {
+    throw new Error(result.error?.message || 'Failed to generate invoice from encounter');
+  }
+  return result.data;
+}
+
+export async function recordInvoicePayment(invoiceId: string, data: any): Promise<any> {
+  const response = await fetch(`/api/billing/invoices/${invoiceId}/payments`, {
+    method: 'POST',
+    headers: { ...getAuthHeader(), 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  });
+  const result: ApiResponse<any> = await response.json();
+  if (!result.success || !result.data) {
+    throw new Error(result.error?.message || 'Failed to record payment');
+  }
+  return result.data;
+}
+
+export async function fetchInvoicePayments(invoiceId: string): Promise<any[]> {
+  const response = await fetch(`/api/billing/invoices/${invoiceId}/payments`, {
+    headers: { ...getAuthHeader(), 'Content-Type': 'application/json' },
+  });
+  const result: ApiResponse<any[]> = await response.json();
+  if (!result.success || !result.data) {
+    throw new Error(result.error?.message || 'Failed to fetch payment transactions');
+  }
+  return result.data;
+}

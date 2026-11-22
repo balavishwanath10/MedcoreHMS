@@ -595,3 +595,77 @@ export interface IDispenseReceipt {
   grandTotal: number;
   notes?: string;
 }
+
+// ==========================================
+// Billing, Invoices & Payment Types (Day 18)
+// ==========================================
+
+export type InvoiceStatus = 'DRAFT' | 'ISSUED' | 'PAID' | 'PARTIALLY_PAID' | 'CANCELLED' | 'VOID';
+
+export type InvoiceLineItemType =
+  'CONSULTATION' | 'PHARMACY' | 'LABORATORY' | 'PROCEDURE' | 'ROOM_BED' | 'OTHER';
+
+export type PaymentMethod = 'CASH' | 'STRIPE' | 'RAZORPAY' | 'INSURANCE_TPA';
+
+export type PaymentStatus = 'PENDING' | 'SUCCESS' | 'FAILED';
+
+export interface IInvoiceLineItem {
+  itemType: InvoiceLineItemType;
+  description: string;
+  quantity: number;
+  unitPrice: number;
+  amount: number;
+  referenceId?: string;
+}
+
+export interface ITpaClaimDetails {
+  providerName: string;
+  policyNumber: string;
+  preAuthCode?: string;
+  claimAmount: number;
+  approvedAmount?: number;
+  claimStatus: 'SUBMITTED' | 'PRE_AUTHORIZED' | 'SETTLED' | 'REJECTED';
+  claimNotes?: string;
+}
+
+export interface IInvoice {
+  _id?: string;
+  hospitalId: string;
+  patientId: string;
+  encounterId?: string;
+  invoiceNumber: string;
+  lineItems: IInvoiceLineItem[];
+  subtotal: number;
+  taxAmount: number;
+  discountAmount: number;
+  totalAmount: number;
+  paidAmount: number;
+  balanceDue: number;
+  status: InvoiceStatus;
+  tpaClaim?: ITpaClaimDetails;
+  dueDate?: string | Date;
+  issuedAt: string | Date;
+  paidAt?: string | Date;
+  isDeleted: boolean;
+  createdAt?: string | Date;
+  updatedAt?: string | Date;
+}
+
+export interface IPaymentTransaction {
+  _id?: string;
+  hospitalId: string;
+  invoiceId: string;
+  patientId: string;
+  paymentMethod: PaymentMethod;
+  amount: number;
+  currency: string;
+  transactionReference: string;
+  gatewayTransactionId?: string;
+  status: PaymentStatus;
+  idempotencyKey?: string;
+  recordedBy: string;
+  recordedAt: string | Date;
+  isDeleted: boolean;
+  createdAt?: string | Date;
+  updatedAt?: string | Date;
+}

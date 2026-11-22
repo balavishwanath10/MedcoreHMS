@@ -18,3 +18,5 @@ export * from './LabTest.js';
 export * from './LabOrder.js';
 export * from './LabResult.js';
 export * from './InventoryBatch.js';
+export * from './Invoice.js';
+export * from './PaymentTransaction.js';

@@ -11,6 +11,7 @@ import {
   Pill,
   FlaskConical,
   Package,
+  CreditCard,
 } from 'lucide-react';
 
 interface LayoutProps {
@@ -28,6 +29,7 @@ export const Layout: React.FC<LayoutProps> = ({ children }) => {
     { to: '/prescriptions', label: 'Prescriptions & Rx', icon: Pill },
     { to: '/lab', label: 'Laboratory & Diagnostics', icon: FlaskConical },
     { to: '/pharmacy', label: 'Pharmacy & Inventory', icon: Package },
+    { to: '/billing', label: 'Billing & Invoices', icon: CreditCard },
   ];
 
   return (
