@@ -10,6 +10,7 @@ import {
 } from '../../shared/schemas/index.js';
 import { timeToMinutes } from '../utils/slotGenerator.js';
 import { logger } from '../utils/logger.js';
+import { notificationService } from '../services/notification.service.js';
 
 export async function createAppointment(
   req: Request,
@@ -258,6 +259,22 @@ export async function createAppointment(
         startTime: appointment.startTime,
         isEmergency,
       });
+
+      // Safe asynchronous reminder dispatch evaluation
+      notificationService
+        .dispatchAppointmentReminder({
+          appointmentId: appointment._id.toString(),
+          recipientEmail: patient.email,
+          recipientPhone: patient.phone,
+          appointmentTime: new Date(appointment.startTime),
+          reminderType: '24_HOUR',
+        })
+        .catch((err) => {
+          logger.warn('Failed to dispatch appointment reminder notification', {
+            appointmentId: appointment._id,
+            error: err.message,
+          });
+        });
 
       res.status(201).json({
         success: true,
@@ -533,6 +550,36 @@ export async function updateAppointmentStatus(
           error: {
             code: 'FORBIDDEN',
             message: 'Patients may only cancel appointments, not change clinical statuses.',
+          },
+          timestamp: new Date().toISOString(),
+        });
+        return;
+      }
+    }
+
+    // Role-based clinical transition restrictions
+    if (userRole === 'RECEPTIONIST') {
+      if (status === 'IN_PROGRESS' || status === 'COMPLETED') {
+        res.status(403).json({
+          success: false,
+          error: {
+            code: 'FORBIDDEN',
+            message:
+              'Receptionists cannot transition clinical consultation statuses (IN_PROGRESS/COMPLETED).',
+          },
+          timestamp: new Date().toISOString(),
+        });
+        return;
+      }
+    }
+
+    if (userRole === 'NURSE') {
+      if (status === 'COMPLETED') {
+        res.status(403).json({
+          success: false,
+          error: {
+            code: 'FORBIDDEN',
+            message: 'Only doctors or administrators may mark clinical encounters completed.',
           },
           timestamp: new Date().toISOString(),
         });

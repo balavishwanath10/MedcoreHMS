@@ -57,4 +57,44 @@ export const notificationService = {
     });
     return { sent: true, provider: 'TWILIO' };
   },
+
+  /**
+   * Dispatches or schedules 24h / 1h appointment reminders via email and SMS.
+   */
+  async dispatchAppointmentReminder(params: {
+    appointmentId: string;
+    recipientEmail?: string;
+    recipientPhone?: string;
+    appointmentTime: Date;
+    reminderType: '24_HOUR' | '1_HOUR';
+  }): Promise<{ emailDelivered: boolean; smsDelivered: boolean }> {
+    let emailDelivered = false;
+    let smsDelivered = false;
+
+    if (params.recipientEmail) {
+      const emailRes = await this.sendEmail({
+        to: params.recipientEmail,
+        subject: `Appointment Reminder (${params.reminderType === '24_HOUR' ? 'Tomorrow' : 'In 1 Hour'})`,
+        text: `Your consultation is scheduled for ${params.appointmentTime.toISOString()}.`,
+      });
+      emailDelivered = emailRes.sent;
+    }
+
+    if (params.recipientPhone) {
+      const smsRes = await this.sendSms({
+        to: params.recipientPhone,
+        message: `MedCoreHMS Reminder: Your appointment is scheduled for ${params.appointmentTime.toLocaleTimeString()}.`,
+      });
+      smsDelivered = smsRes.sent;
+    }
+
+    logger.info('Appointment reminder dispatch evaluated', {
+      appointmentId: params.appointmentId,
+      reminderType: params.reminderType,
+      emailDelivered,
+      smsDelivered,
+    });
+
+    return { emailDelivered, smsDelivered };
+  },
 };
