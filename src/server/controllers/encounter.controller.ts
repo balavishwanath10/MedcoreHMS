@@ -15,6 +15,99 @@ import { logger } from '../utils/logger.js';
 import { ROLES, UserRole } from '../../shared/constants/roles.js';
 import { IClinicalRevision } from '../../shared/types/index.js';
 
+/**
+ * Reconstructs the current active clinical state from the original persisted values
+ * and sequential revisions without destroying historical clinical entries.
+ */
+export function getCurrentClinicalState(encounter: any): Record<string, any> {
+  const base: Record<string, any> = {
+    chiefComplaint: encounter.originalRecord?.chiefComplaint ?? encounter.chiefComplaint,
+    vitals:
+      encounter.originalRecord?.vitals ??
+      (encounter.vitals ? JSON.parse(JSON.stringify(encounter.vitals)) : undefined),
+    symptoms:
+      encounter.originalRecord?.symptoms ??
+      (encounter.symptoms ? JSON.parse(JSON.stringify(encounter.symptoms)) : []),
+    historyOfPresentIllness:
+      encounter.originalRecord?.historyOfPresentIllness ?? encounter.historyOfPresentIllness,
+    clinicalNotes: encounter.originalRecord?.clinicalNotes ?? encounter.clinicalNotes,
+    assessment: encounter.originalRecord?.assessment ?? encounter.assessment,
+    diagnoses:
+      encounter.originalRecord?.diagnoses ??
+      (encounter.diagnoses ? JSON.parse(JSON.stringify(encounter.diagnoses)) : []),
+    treatmentPlan:
+      encounter.originalRecord?.treatmentPlan ??
+      (encounter.treatmentPlan ? JSON.parse(JSON.stringify(encounter.treatmentPlan)) : undefined),
+  };
+
+  if (encounter.revisions && Array.isArray(encounter.revisions)) {
+    for (const rev of encounter.revisions) {
+      if (rev.revisedSnapshot) {
+        if (rev.revisedSnapshot.chiefComplaint !== undefined) {
+          base.chiefComplaint = rev.revisedSnapshot.chiefComplaint;
+        }
+        if (rev.revisedSnapshot.vitals !== undefined) {
+          base.vitals = rev.revisedSnapshot.vitals;
+        }
+        if (rev.revisedSnapshot.symptoms !== undefined) {
+          base.symptoms = rev.revisedSnapshot.symptoms;
+        }
+        if (rev.revisedSnapshot.historyOfPresentIllness !== undefined) {
+          base.historyOfPresentIllness = rev.revisedSnapshot.historyOfPresentIllness;
+        }
+        if (rev.revisedSnapshot.clinicalNotes !== undefined) {
+          base.clinicalNotes = rev.revisedSnapshot.clinicalNotes;
+        }
+        if (rev.revisedSnapshot.assessment !== undefined) {
+          base.assessment = rev.revisedSnapshot.assessment;
+        }
+        if (rev.revisedSnapshot.diagnoses !== undefined) {
+          base.diagnoses = rev.revisedSnapshot.diagnoses;
+        }
+        if (rev.revisedSnapshot.treatmentPlan !== undefined) {
+          base.treatmentPlan = rev.revisedSnapshot.treatmentPlan;
+        }
+      }
+    }
+  }
+
+  return base;
+}
+
+/**
+ * Formats an encounter for API response with reconstructed current clinical view,
+ * while preserving original persisted records, revisions and addenda.
+ */
+export function formatEncounterResponse(encounter: any): Record<string, any> {
+  if (!encounter) return encounter;
+  const raw = typeof encounter.toObject === 'function' ? encounter.toObject() : { ...encounter };
+  const current = getCurrentClinicalState(encounter);
+
+  return {
+    ...raw,
+    // Active clinical view reconstructed on top of original entries
+    chiefComplaint: current.chiefComplaint,
+    vitals: current.vitals,
+    symptoms: current.symptoms,
+    historyOfPresentIllness: current.historyOfPresentIllness,
+    clinicalNotes: current.clinicalNotes,
+    assessment: current.assessment,
+    diagnoses: current.diagnoses,
+    treatmentPlan: current.treatmentPlan,
+    currentClinicalView: current,
+    originalRecord: raw.originalRecord || {
+      chiefComplaint: raw.chiefComplaint,
+      vitals: raw.vitals,
+      symptoms: raw.symptoms,
+      historyOfPresentIllness: raw.historyOfPresentIllness,
+      clinicalNotes: raw.clinicalNotes,
+      assessment: raw.assessment,
+      diagnoses: raw.diagnoses,
+      treatmentPlan: raw.treatmentPlan,
+    },
+  };
+}
+
 export class EncounterController {
   /**
    * Preview vitals calculation (BMI, Category, Abnormal Flags)
@@ -153,10 +246,25 @@ export class EncounterController {
         enrichedVitals = enrichVitals(validated.vitals);
       }
 
+      // Preserve immutable initial clinical entry
+      const initialRecord = {
+        chiefComplaint: validated.chiefComplaint,
+        vitals: enrichedVitals,
+        symptoms: validated.symptoms || [],
+        historyOfPresentIllness: validated.historyOfPresentIllness,
+        clinicalNotes: validated.clinicalNotes,
+        assessment: validated.assessment,
+        diagnoses: validated.diagnoses || [],
+        treatmentPlan: validated.treatmentPlan,
+        createdAt: new Date(),
+        createdBy: req.user?.userId || 'unknown',
+      };
+
       const encounter = await Encounter.create({
         ...validated,
         hospitalId,
         vitals: enrichedVitals,
+        originalRecord: initialRecord,
         status: 'OPEN',
         isDeleted: false,
       });
@@ -171,7 +279,7 @@ export class EncounterController {
 
       res.status(201).json({
         success: true,
-        data: encounter,
+        data: formatEncounterResponse(encounter),
         timestamp: new Date().toISOString(),
       });
     } catch (err: any) {
@@ -258,7 +366,7 @@ export class EncounterController {
 
       res.status(200).json({
         success: true,
-        data: encounters,
+        data: encounters.map(formatEncounterResponse),
         timestamp: new Date().toISOString(),
       });
     } catch (err: any) {
@@ -333,7 +441,7 @@ export class EncounterController {
 
       res.status(200).json({
         success: true,
-        data: encounter,
+        data: formatEncounterResponse(encounter),
         timestamp: new Date().toISOString(),
       });
     } catch (err: any) {
@@ -403,77 +511,89 @@ export class EncounterController {
 
       const validated = encounterUpdateSchema.parse(req.body);
 
-      // EMR APPEND-ONLY IMMUTABILITY:
-      // Capture historical snapshot before updating, ensuring no clinical entries are silently overwritten
+      // STRICT APPEND-ONLY EMR:
+      // Reconstruct active clinical state from baseline + revisions.
+      // NEVER overwrite existing clinical fields on the base document.
+      // Every subsequent clinical correction is appended as an immutable revision.
+      const current = getCurrentClinicalState(encounter);
+
+      // Preserve baseline if not previously persisted
+      if (!encounter.originalRecord) {
+        encounter.originalRecord = {
+          chiefComplaint: encounter.chiefComplaint,
+          vitals: encounter.vitals,
+          symptoms: encounter.symptoms,
+          historyOfPresentIllness: encounter.historyOfPresentIllness,
+          clinicalNotes: encounter.clinicalNotes,
+          assessment: encounter.assessment,
+          diagnoses: encounter.diagnoses,
+          treatmentPlan: encounter.treatmentPlan,
+          createdAt: encounter.createdAt || new Date(),
+          createdBy: req.user?.userId || 'unknown',
+        };
+      }
+
       const changedFields: string[] = [];
       const previousSnapshot: Record<string, any> = {};
       const revisedSnapshot: Record<string, any> = {};
 
       if (
         validated.chiefComplaint !== undefined &&
-        validated.chiefComplaint !== encounter.chiefComplaint
+        validated.chiefComplaint !== current.chiefComplaint
       ) {
         changedFields.push('chiefComplaint');
-        previousSnapshot.chiefComplaint = encounter.chiefComplaint;
+        previousSnapshot.chiefComplaint = current.chiefComplaint;
         revisedSnapshot.chiefComplaint = validated.chiefComplaint;
-        encounter.chiefComplaint = validated.chiefComplaint;
       }
       if (validated.vitals !== undefined) {
         changedFields.push('vitals');
-        previousSnapshot.vitals = encounter.vitals
-          ? JSON.parse(JSON.stringify(encounter.vitals))
+        previousSnapshot.vitals = current.vitals
+          ? JSON.parse(JSON.stringify(current.vitals))
           : undefined;
         const newVitals = enrichVitals(validated.vitals);
         revisedSnapshot.vitals = newVitals;
-        encounter.vitals = newVitals;
       }
       if (validated.symptoms !== undefined) {
         changedFields.push('symptoms');
-        previousSnapshot.symptoms = encounter.symptoms
-          ? JSON.parse(JSON.stringify(encounter.symptoms))
+        previousSnapshot.symptoms = current.symptoms
+          ? JSON.parse(JSON.stringify(current.symptoms))
           : [];
         revisedSnapshot.symptoms = validated.symptoms;
-        encounter.symptoms = validated.symptoms as any;
       }
       if (
         validated.historyOfPresentIllness !== undefined &&
-        validated.historyOfPresentIllness !== encounter.historyOfPresentIllness
+        validated.historyOfPresentIllness !== current.historyOfPresentIllness
       ) {
         changedFields.push('historyOfPresentIllness');
-        previousSnapshot.historyOfPresentIllness = encounter.historyOfPresentIllness;
+        previousSnapshot.historyOfPresentIllness = current.historyOfPresentIllness;
         revisedSnapshot.historyOfPresentIllness = validated.historyOfPresentIllness;
-        encounter.historyOfPresentIllness = validated.historyOfPresentIllness;
       }
       if (
         validated.clinicalNotes !== undefined &&
-        validated.clinicalNotes !== encounter.clinicalNotes
+        validated.clinicalNotes !== current.clinicalNotes
       ) {
         changedFields.push('clinicalNotes');
-        previousSnapshot.clinicalNotes = encounter.clinicalNotes;
+        previousSnapshot.clinicalNotes = current.clinicalNotes;
         revisedSnapshot.clinicalNotes = validated.clinicalNotes;
-        encounter.clinicalNotes = validated.clinicalNotes;
       }
-      if (validated.assessment !== undefined && validated.assessment !== encounter.assessment) {
+      if (validated.assessment !== undefined && validated.assessment !== current.assessment) {
         changedFields.push('assessment');
-        previousSnapshot.assessment = encounter.assessment;
+        previousSnapshot.assessment = current.assessment;
         revisedSnapshot.assessment = validated.assessment;
-        encounter.assessment = validated.assessment;
       }
       if (validated.diagnoses !== undefined) {
         changedFields.push('diagnoses');
-        previousSnapshot.diagnoses = encounter.diagnoses
-          ? JSON.parse(JSON.stringify(encounter.diagnoses))
+        previousSnapshot.diagnoses = current.diagnoses
+          ? JSON.parse(JSON.stringify(current.diagnoses))
           : [];
         revisedSnapshot.diagnoses = validated.diagnoses;
-        encounter.diagnoses = validated.diagnoses as any;
       }
       if (validated.treatmentPlan !== undefined) {
         changedFields.push('treatmentPlan');
-        previousSnapshot.treatmentPlan = encounter.treatmentPlan
-          ? JSON.parse(JSON.stringify(encounter.treatmentPlan))
+        previousSnapshot.treatmentPlan = current.treatmentPlan
+          ? JSON.parse(JSON.stringify(current.treatmentPlan))
           : undefined;
         revisedSnapshot.treatmentPlan = validated.treatmentPlan;
-        encounter.treatmentPlan = validated.treatmentPlan as any;
       }
 
       if (changedFields.length > 0) {
@@ -497,14 +617,15 @@ export class EncounterController {
 
       await encounter.save();
 
-      logger.info('Draft encounter updated successfully', {
+      logger.info('Draft encounter updated successfully with append-only revision', {
         encounterId: encounter._id,
         hospitalId: encounter.hospitalId,
+        revisionNumber: encounter.revisions?.length || 0,
       });
 
       res.status(200).json({
         success: true,
-        data: encounter,
+        data: formatEncounterResponse(encounter),
         timestamp: new Date().toISOString(),
       });
     } catch (err: any) {
@@ -641,7 +762,7 @@ export class EncounterController {
 
       res.status(200).json({
         success: true,
-        data: encounter,
+        data: formatEncounterResponse(encounter),
         timestamp: new Date().toISOString(),
       });
     } catch (err: any) {
@@ -764,7 +885,7 @@ export class EncounterController {
 
       res.status(200).json({
         success: true,
-        data: encounter,
+        data: formatEncounterResponse(encounter),
         timestamp: new Date().toISOString(),
       });
     } catch (err: any) {

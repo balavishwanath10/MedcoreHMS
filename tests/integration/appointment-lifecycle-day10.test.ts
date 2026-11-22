@@ -570,25 +570,88 @@ describe('Day 10: Appointment Lifecycle, Transitions & Emergency Bookings Integr
         },
       ];
 
-      vi.spyOn(mongoose.connection, 'readyState', 'get').mockReturnValue(1);
+      const origReadyState = (mongoose.connection as any)._readyState;
+      (mongoose.connection as any)._readyState = 1;
       vi.spyOn(ScheduledReminder, 'find').mockResolvedValue(mockPendingDocs as any);
+      vi.spyOn(ScheduledReminder, 'findOneAndUpdate').mockResolvedValue(mockPendingDocs[1] as any);
       vi.spyOn(ScheduledReminder, 'findByIdAndUpdate').mockResolvedValue({} as any);
 
-      // Simulate clean restart by clearing in-memory state
-      reminderScheduler.clearAll();
-      expect(reminderScheduler.getJobs()).toHaveLength(0);
+      try {
+        // Simulate clean restart by clearing in-memory state
+        reminderScheduler.clearAll();
+        expect(reminderScheduler.getJobs()).toHaveLength(0);
 
-      // Execute recovery
-      const recoveryResult = await reminderScheduler.recoverPendingReminders();
+        // Execute recovery
+        const recoveryResult = await reminderScheduler.recoverPendingReminders();
 
-      expect(recoveryResult.recoveredCount).toBe(2);
-      expect(recoveryResult.rearmedFuture).toBe(1);
-      expect(recoveryResult.dispatchedImmediate).toBe(1);
+        expect(recoveryResult.recoveredCount).toBe(2);
+        expect(recoveryResult.rearmedFuture).toBe(1);
+        expect(recoveryResult.dispatchedImmediate).toBe(1);
 
-      // Verify future job is restored in memory with active timer
-      const recoveredJobs = reminderScheduler.getJobs();
-      expect(recoveredJobs.length).toBeGreaterThanOrEqual(1);
-      expect(recoveredJobs.some((j) => j.status === 'SCHEDULED' && j.timer !== null)).toBe(true);
+        // Verify future job is restored in memory with active timer
+        const recoveredJobs = reminderScheduler.getJobs();
+        expect(recoveredJobs.length).toBeGreaterThanOrEqual(1);
+        expect(recoveredJobs.some((j) => j.status === 'SCHEDULED' && j.timer !== null)).toBe(true);
+      } finally {
+        (mongoose.connection as any)._readyState = origReadyState;
+      }
+    });
+
+    it('DURABLE SCHEDULER AUDIT: should refuse to claim durable scheduling when MongoDB persistence fails', async () => {
+      const origReadyState = (mongoose.connection as any)._readyState;
+      (mongoose.connection as any)._readyState = 1;
+      vi.spyOn(ScheduledReminder, 'create').mockRejectedValue(
+        new Error('MongoNetworkError: failed to connect to server'),
+      );
+
+      try {
+        reminderScheduler.clearAll();
+
+        const futureAppt = new Date(Date.now() + 48 * 3600000);
+        const scheduleResult = await reminderScheduler.scheduleAppointmentReminders({
+          appointmentId,
+          hospitalId: hospitalAId,
+          appointmentTime: futureAppt,
+          recipientEmail: 'patient@example.com',
+        });
+
+        // Refuses to claim durable success when database persistence failed
+        expect(scheduleResult.scheduledCount).toBe(0);
+        const jobs = reminderScheduler.getJobs(appointmentId);
+        expect(jobs.every((j) => j.status === 'FAILED')).toBe(true);
+      } finally {
+        (mongoose.connection as any)._readyState = origReadyState;
+      }
+    });
+
+    it('DURABLE RECOVERY AUDIT: should never dispatch the same reminder twice when concurrent worker already claimed it', async () => {
+      const origReadyState = (mongoose.connection as any)._readyState;
+      (mongoose.connection as any)._readyState = 1;
+      const overdueDoc: any = {
+        _id: new mongoose.Types.ObjectId(),
+        appointmentId: new mongoose.Types.ObjectId(appointmentId),
+        hospitalId: new mongoose.Types.ObjectId(hospitalAId),
+        reminderType: '24_HOUR',
+        scheduledFor: new Date(Date.now() - 3600000),
+        status: 'PENDING',
+      };
+
+      vi.spyOn(ScheduledReminder, 'find').mockResolvedValue([overdueDoc] as any);
+      // Atomic claim returns null (simulating concurrent worker already acquired this reminder)
+      vi.spyOn(ScheduledReminder, 'findOneAndUpdate').mockResolvedValue(null);
+      const dispatchSpy = vi.spyOn(notificationService, 'dispatchAppointmentReminder');
+
+      try {
+        reminderScheduler.clearAll();
+        const recoveryResult = await reminderScheduler.recoverPendingReminders();
+
+        expect(recoveryResult.recoveredCount).toBe(1);
+        expect(recoveryResult.dispatchedImmediate).toBe(1);
+        // Notification dispatch was skipped because another worker claimed the record
+        expect(dispatchSpy).not.toHaveBeenCalled();
+      } finally {
+        (mongoose.connection as any)._readyState = origReadyState;
+      }
     });
 
     it('PROVIDER CREDENTIALS ABSENT: should report delivery as unavailable without claiming success', async () => {

@@ -214,9 +214,16 @@ describe('Day 11: EMR Encounters, Vitals & Immutability Integration Tests', () =
 
       expect(res.statusCode).toBe(200);
       expect(res.body.success).toBe(true);
-      expect(mockEncounter.chiefComplaint).toBe('Updated complaint with new findings');
+      // API response returns reconstructed current clinical view
+      expect(res.body.data.chiefComplaint).toBe('Updated complaint with new findings');
+      // Base document original values are preserved and never overwritten
+      expect(mockEncounter.chiefComplaint).toBe('Old complaint');
+      expect(mockEncounter.originalRecord.chiefComplaint).toBe('Old complaint');
       expect(mockEncounter.revisions).toHaveLength(1);
       expect(mockEncounter.revisions[0].previousSnapshot.chiefComplaint).toBe('Old complaint');
+      expect(mockEncounter.revisions[0].revisedSnapshot.chiefComplaint).toBe(
+        'Updated complaint with new findings',
+      );
       expect(mockEncounter.revisions[0].reasonForChange).toBe(
         'Patient reported secondary symptoms during consultation',
       );
@@ -261,7 +268,7 @@ describe('Day 11: EMR Encounters, Vitals & Immutability Integration Tests', () =
       });
 
       // Third revision to strictly prove old entries remain untouched
-      await makeRequest(app, {
+      const thirdRes = await makeRequest(app, {
         method: 'PUT',
         url: `/api/encounters/${encounterId}`,
         headers: { authorization: `Bearer ${doctorToken}` },
@@ -285,7 +292,9 @@ describe('Day 11: EMR Encounters, Vitals & Immutability Integration Tests', () =
       expect(mockEncounter.revisions[1].previousSnapshot.chiefComplaint).toBe(
         'First revision text',
       );
-      expect(mockEncounter.revisions[1].revisedSnapshot.chiefComplaint).toBe('Second revision text');
+      expect(mockEncounter.revisions[1].revisedSnapshot.chiefComplaint).toBe(
+        'Second revision text',
+      );
       expect(mockEncounter.revisions[1].reasonForChange).toBe('Attending physician follow-up note');
 
       // Verify third entry
@@ -296,7 +305,11 @@ describe('Day 11: EMR Encounters, Vitals & Immutability Integration Tests', () =
       expect(mockEncounter.revisions[2].revisedSnapshot.chiefComplaint).toBe('Third revision text');
       expect(mockEncounter.revisions[2].reasonForChange).toBe('Final pre-sign clinical adjustment');
 
-      expect(mockEncounter.chiefComplaint).toBe('Third revision text');
+      // STRICT APPEND-ONLY: Reconstructed view reflects latest revision
+      expect(thirdRes.body.data.chiefComplaint).toBe('Third revision text');
+      // Original persisted value before and after multiple corrections is NEVER overwritten
+      expect(mockEncounter.chiefComplaint).toBe('Original entry baseline');
+      expect(mockEncounter.originalRecord.chiefComplaint).toBe('Original entry baseline');
     });
 
     it('CRITICAL APPEND-ONLY AUDIT: should reject clinical correction without mandatory reasonForChange', async () => {
@@ -326,6 +339,96 @@ describe('Day 11: EMR Encounters, Vitals & Immutability Integration Tests', () =
       expect(res.body.success).toBe(false);
       expect(res.body.error.code).toBe('VALIDATION_ERROR');
       expect(mockEncounter.save).not.toHaveBeenCalled();
+    });
+
+    it('CRITICAL APPEND-ONLY AUDIT: should compare original persisted values before and after multiple corrections to confirm zero overwrite', async () => {
+      const doctorToken = createToken(ROLES.DOCTOR);
+
+      const persistedEncounter: any = {
+        _id: encounterId,
+        hospitalId: hospitalAId,
+        status: 'OPEN',
+        chiefComplaint: 'Persisted Initial Complaint: Acute Bronchitis',
+        clinicalNotes: 'Initial notes: Wheezing noted bilaterally',
+        assessment: 'Initial assessment: Likely viral bronchitis',
+        revisions: [],
+        originalRecord: {
+          chiefComplaint: 'Persisted Initial Complaint: Acute Bronchitis',
+          clinicalNotes: 'Initial notes: Wheezing noted bilaterally',
+          assessment: 'Initial assessment: Likely viral bronchitis',
+        },
+        save: vi.fn().mockResolvedValue(true),
+      };
+
+      (vi.spyOn(Encounter, 'findOne') as any).mockResolvedValue(persistedEncounter);
+
+      // Verify baseline before any updates
+      expect(persistedEncounter.chiefComplaint).toBe(
+        'Persisted Initial Complaint: Acute Bronchitis',
+      );
+      expect(persistedEncounter.originalRecord.chiefComplaint).toBe(
+        'Persisted Initial Complaint: Acute Bronchitis',
+      );
+
+      // Correction 1
+      const update1 = await makeRequest(app, {
+        method: 'PUT',
+        url: `/api/encounters/${encounterId}`,
+        headers: { authorization: `Bearer ${doctorToken}` },
+        body: {
+          chiefComplaint: 'Correction 1: Cough variant asthma suspected',
+          reasonForChange: 'Patient has history of childhood asthma',
+        },
+      });
+
+      expect(update1.statusCode).toBe(200);
+      expect(update1.body.data.chiefComplaint).toBe('Correction 1: Cough variant asthma suspected');
+      // Persisted base document is UNCHANGED
+      expect(persistedEncounter.chiefComplaint).toBe(
+        'Persisted Initial Complaint: Acute Bronchitis',
+      );
+
+      // Correction 2
+      const update2 = await makeRequest(app, {
+        method: 'PUT',
+        url: `/api/encounters/${encounterId}`,
+        headers: { authorization: `Bearer ${doctorToken}` },
+        body: {
+          clinicalNotes: 'Follow-up: Nebulizer administered with relief',
+          reasonForChange: 'Treatment response recorded',
+        },
+      });
+
+      expect(update2.statusCode).toBe(200);
+      expect(update2.body.data.chiefComplaint).toBe('Correction 1: Cough variant asthma suspected');
+      expect(update2.body.data.clinicalNotes).toBe('Follow-up: Nebulizer administered with relief');
+
+      // Base document original values are strictly preserved
+      expect(persistedEncounter.chiefComplaint).toBe(
+        'Persisted Initial Complaint: Acute Bronchitis',
+      );
+      expect(persistedEncounter.originalRecord.chiefComplaint).toBe(
+        'Persisted Initial Complaint: Acute Bronchitis',
+      );
+      expect(persistedEncounter.clinicalNotes).toBe('Initial notes: Wheezing noted bilaterally');
+      expect(persistedEncounter.originalRecord.clinicalNotes).toBe(
+        'Initial notes: Wheezing noted bilaterally',
+      );
+
+      // Ensure historical revisions capture complete progression
+      expect(persistedEncounter.revisions).toHaveLength(2);
+      expect(persistedEncounter.revisions[0].previousSnapshot.chiefComplaint).toBe(
+        'Persisted Initial Complaint: Acute Bronchitis',
+      );
+      expect(persistedEncounter.revisions[0].revisedSnapshot.chiefComplaint).toBe(
+        'Correction 1: Cough variant asthma suspected',
+      );
+      expect(persistedEncounter.revisions[1].previousSnapshot.clinicalNotes).toBe(
+        'Initial notes: Wheezing noted bilaterally',
+      );
+      expect(persistedEncounter.revisions[1].revisedSnapshot.clinicalNotes).toBe(
+        'Follow-up: Nebulizer administered with relief',
+      );
     });
 
     it('CRITICAL IMMUTABILITY: should reject direct modification of a SIGNED encounter', async () => {

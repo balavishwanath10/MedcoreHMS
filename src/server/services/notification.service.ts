@@ -1,3 +1,4 @@
+import nodemailer from 'nodemailer';
 import { logger } from '../utils/logger.js';
 
 export interface EmailOptions {
@@ -22,15 +23,17 @@ export interface DeliveryResult {
 
 export const notificationService = {
   /**
-   * Safe email delivery abstraction.
+   * Safe email delivery abstraction using Nodemailer SMTP client.
    * If SMTP is not configured, safely reports delivery unavailable without claiming success.
-   * When configured, performs actual provider connection attempt before reporting success.
+   * When configured, authenticates and submits message to SMTP gateway.
+   * Returns sent: true only after the SMTP server accepts the message.
    */
   async sendEmail(options: EmailOptions): Promise<DeliveryResult> {
     const host = process.env.SMTP_HOST;
-    const port = Number(process.env.SMTP_PORT) || 2525;
+    const port = Number(process.env.SMTP_PORT) || 587;
     const user = process.env.SMTP_USER;
     const pass = process.env.SMTP_PASS;
+    const from = process.env.SMTP_FROM || `"MedCoreHMS" <${user || 'no-reply@medcorehms.local'}>`;
 
     const isConfigured = Boolean(
       host &&
@@ -56,33 +59,45 @@ export const notificationService = {
       };
     }
 
-    // Attempt real SMTP connection check
     try {
-      const net = await import('net');
-      await new Promise<void>((resolve, reject) => {
-        const socket = net.createConnection({ host, port, timeout: 4000 });
-        socket.once('connect', () => {
-          socket.destroy();
-          resolve();
-        });
-        socket.once('timeout', () => {
-          socket.destroy();
-          reject(new Error(`SMTP connection timed out connecting to ${host}:${port}`));
-        });
-        socket.once('error', (err) => {
-          socket.destroy();
-          reject(err);
-        });
+      const secure = port === 465;
+      const transporter = nodemailer.createTransport({
+        host,
+        port,
+        secure,
+        auth: {
+          user,
+          pass,
+        },
+        connectionTimeout: 5000,
+        greetingTimeout: 5000,
+        socketTimeout: 5000,
       });
 
-      logger.info('Email dispatched via verified SMTP gateway', {
+      const info = await transporter.sendMail({
+        from,
+        to: options.to,
+        subject: options.subject,
+        text: options.text,
+        html: options.html,
+      });
+
+      logger.info('Email accepted for delivery by SMTP gateway', {
         recipientDomain: options.to.split('@')[1] || 'unknown',
         subject: options.subject,
+        messageId: info.messageId,
       });
-      return { sent: true, provider: 'SMTP' };
+
+      return {
+        sent: true,
+        provider: 'SMTP',
+        messageId: info.messageId,
+      };
     } catch (smtpErr: any) {
+      // Strictly prevent credential or sensitive data leakage in logs
       logger.error('SMTP provider error during email delivery', {
         error: smtpErr.message,
+        code: smtpErr.code,
         host,
         port,
       });

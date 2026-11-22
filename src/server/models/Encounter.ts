@@ -179,6 +179,9 @@ const EncounterSchema = new Schema<EncounterDocument>(
     },
     addenda: [AddendumSchema],
     revisions: [ClinicalRevisionSchema],
+    originalRecord: {
+      type: Schema.Types.Mixed,
+    },
     isDeleted: {
       type: Boolean,
       default: false,

@@ -253,6 +253,8 @@ export interface IEncounter {
   signedBy?: string | null;
   addenda?: IEncounterAddendum[];
   revisions?: IClinicalRevision[];
+  originalRecord?: Record<string, any>;
+  currentClinicalView?: Record<string, any>;
   isDeleted: boolean;
   createdAt?: string | Date;
   updatedAt?: string | Date;

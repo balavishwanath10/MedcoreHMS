@@ -29,7 +29,9 @@ export interface ReminderInfrastructureReport {
   hasBullMQ: boolean;
   engine: 'MONGO_PERSISTED_DURABLE_SCHEDULER';
   status: 'ACTIVE_DURABLE' | 'INFRASTRUCTURE_UNAVAILABLE';
+  isDatabaseConnected: boolean;
   message: string;
+  limitations: string[];
 }
 
 class ReminderSchedulerService {
@@ -37,9 +39,10 @@ class ReminderSchedulerService {
 
   /**
    * Reports infrastructure readiness for scheduled reminders.
-   * Accurately reports persistent MongoDB-backed durable scheduler with restart recovery.
+   * Accurately reports persistent MongoDB-backed durable scheduler with restart recovery and limitations.
    */
   getInfrastructureReport(): ReminderInfrastructureReport {
+    const isDbConnected = mongoose.connection.readyState === 1;
     const hasRedis = !!process.env.REDIS_URL && process.env.REDIS_URL !== 'placeholder';
     const hasBullMQ = false; // Not in package.json dependencies
 
@@ -47,9 +50,18 @@ class ReminderSchedulerService {
       hasRedis,
       hasBullMQ,
       engine: 'MONGO_PERSISTED_DURABLE_SCHEDULER',
-      status: 'ACTIVE_DURABLE',
-      message:
-        'Durable appointment reminder scheduler backed by persistent MongoDB ScheduledReminder collection with automated restart recovery, exact timer execution, duplicate suppression, and channel failure isolation.',
+      status: isDbConnected ? 'ACTIVE_DURABLE' : 'INFRASTRUCTURE_UNAVAILABLE',
+      isDatabaseConnected: isDbConnected,
+      message: isDbConnected
+        ? 'Durable appointment reminder scheduler backed by persistent MongoDB ScheduledReminder collection with atomic restart recovery, exact timer execution, duplicate suppression, and channel failure isolation.'
+        : 'MongoDB connection is not active; durable reminder persistence via ScheduledReminder collection cannot be guaranteed. Scheduled jobs will be limited to process memory.',
+      limitations: [
+        'Requires active MongoDB connection for persistence; jobs will not survive server restart if database is disconnected.',
+        'Single-instance timers coordinate via MongoDB atomic state transitions (status: PENDING -> PROCESSING) to prevent duplicate dispatch across recovery cycles.',
+        'External distributed message queues (BullMQ/Redis) are not configured; horizontally scaled multi-worker clusters require Redis for distributed job coordination.',
+        'Email transmission requires SMTP credentials; returns SMTP_UNAVAILABLE without claiming delivery when unconfigured.',
+        'SMS transmission requires Twilio credentials; returns TWILIO_UNAVAILABLE without claiming delivery when unconfigured.',
+      ],
     };
   }
 
@@ -91,27 +103,10 @@ class ReminderSchedulerService {
         continue;
       }
 
-      // Check MongoDB for existing scheduled reminder if database is connected
+      // Persist to MongoDB with atomic duplicate prevention if database is connected
       if (mongoose.connection.readyState === 1 && params.hospitalId) {
         try {
-          const existingDbReminder = await ScheduledReminder.findOne({
-            hospitalId: params.hospitalId,
-            appointmentId: params.appointmentId,
-            reminderType: window.type,
-            status: { $in: ['PENDING', 'PROCESSING', 'DISPATCHED'] },
-            isDeleted: false,
-          });
-
-          if (existingDbReminder) {
-            logger.warn('Persistent DB duplicate reminder schedule attempt prevented', {
-              jobId,
-              appointmentId: params.appointmentId,
-              status: existingDbReminder.status,
-            });
-            continue;
-          }
-
-          // Persist durable scheduled reminder record
+          // Atomic insertion relying on unique compound index { hospitalId, appointmentId, reminderType }
           await ScheduledReminder.create({
             hospitalId: params.hospitalId,
             appointmentId: params.appointmentId,
@@ -130,10 +125,40 @@ class ReminderSchedulerService {
             isDeleted: false,
           });
         } catch (dbErr: any) {
-          logger.error('Failed to persist durable ScheduledReminder to MongoDB', {
-            jobId,
-            error: dbErr.message,
-          });
+          if (dbErr.code === 11000) {
+            // Atomic duplicate prevented by unique compound index in MongoDB
+            logger.warn('Atomic duplicate scheduled reminder prevented by unique database index', {
+              jobId,
+              appointmentId: params.appointmentId,
+              reminderType: window.type,
+            });
+            continue;
+          }
+
+          // Persistence genuinely failed: DO NOT claim durable scheduling or silently fall back!
+          logger.error(
+            'Failed to durably persist ScheduledReminder to MongoDB; refusing to claim durable schedule',
+            {
+              jobId,
+              error: dbErr.message,
+            },
+          );
+
+          const failedJob: ScheduledReminderJob = {
+            id: jobId,
+            appointmentId: params.appointmentId,
+            hospitalId: params.hospitalId,
+            reminderType: window.type,
+            scheduledFor,
+            status: 'FAILED',
+            recipientEmail: params.recipientEmail,
+            recipientPhone: params.recipientPhone,
+            appointmentTime: apptTime,
+            timer: null,
+          };
+          this.jobs.set(jobId, failedJob);
+          scheduledJobs.push(failedJob);
+          continue;
         }
       }
 
@@ -391,6 +416,32 @@ class ReminderSchedulerService {
     }
 
     try {
+      // If connected to MongoDB, ensure atomic state acquisition to prevent double-firing
+      if (mongoose.connection.readyState === 1) {
+        const claimed = await ScheduledReminder.findOneAndUpdate(
+          {
+            appointmentId: job.appointmentId,
+            reminderType: job.reminderType,
+            status: 'PENDING',
+          },
+          {
+            $set: { status: 'PROCESSING' },
+            $inc: { attempts: 1 },
+          },
+          { new: true },
+        );
+
+        if (!claimed) {
+          logger.info(
+            'Persistent reminder already processed or claimed, skipping in-memory dispatch',
+            {
+              jobId,
+            },
+          );
+          return job;
+        }
+      }
+
       const result = await notificationService.dispatchAppointmentReminder({
         appointmentId: job.appointmentId,
         recipientEmail: job.recipientEmail,
@@ -406,7 +457,7 @@ class ReminderSchedulerService {
           {
             appointmentId: job.appointmentId,
             reminderType: job.reminderType,
-            status: { $in: ['PENDING', 'PROCESSING'] },
+            status: 'PROCESSING',
           },
           {
             $set: {
@@ -414,7 +465,6 @@ class ReminderSchedulerService {
               dispatchedAt: new Date(),
               deliveryResult: result,
             },
-            $inc: { attempts: 1 },
           },
         );
       }
@@ -436,10 +486,30 @@ class ReminderSchedulerService {
   private async executeReminderRecord(reminder: any): Promise<void> {
     const jobId = `${reminder.appointmentId.toString()}:${reminder.reminderType}`;
     try {
-      await ScheduledReminder.findByIdAndUpdate(reminder._id, {
-        $set: { status: 'PROCESSING' },
-        $inc: { attempts: 1 },
-      });
+      // Atomic acquisition: only proceed if status is still PENDING.
+      // Guarantees server restart recovery or concurrent workers never dispatch the same reminder twice!
+      const claimed = await ScheduledReminder.findOneAndUpdate(
+        {
+          _id: reminder._id,
+          status: 'PENDING',
+        },
+        {
+          $set: { status: 'PROCESSING' },
+          $inc: { attempts: 1 },
+        },
+        { new: true },
+      );
+
+      if (!claimed) {
+        logger.info(
+          'Reminder record already claimed or processed, skipping duplicate recovery dispatch',
+          {
+            jobId,
+            reminderId: reminder._id,
+          },
+        );
+        return;
+      }
 
       const result = await notificationService.dispatchAppointmentReminder({
         appointmentId: reminder.appointmentId.toString(),
@@ -459,7 +529,7 @@ class ReminderSchedulerService {
 
       const inMem = this.jobs.get(jobId);
       if (inMem) {
-        inMem.status = 'DISPATCHED';
+        inMem.status = result.emailDelivered || result.smsDelivered ? 'DISPATCHED' : 'FAILED';
         inMem.result = result;
       }
     } catch (dispatchErr: any) {

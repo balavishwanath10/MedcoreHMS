@@ -13,6 +13,11 @@ import { Appointment } from '../../src/server/models/Appointment.js';
 
 describe('Real MongoDB Replica-Set Booking Concurrency Integration Tests', () => {
   let isConnectedToReplicaSet = false;
+  const isLiveRequested =
+    process.env.RUN_LIVE_CONCURRENCY === 'true' ||
+    process.env.REQUIRE_LIVE_REPLICA === 'true' ||
+    process.env.RUN_LIVE_REPLICA_TESTS === 'true';
+
   let testHospitalId: mongoose.Types.ObjectId | null = null;
   let testDoctor1Id: mongoose.Types.ObjectId | null = null;
   let testDoctor2Id: mongoose.Types.ObjectId | null = null;
@@ -30,8 +35,13 @@ describe('Real MongoDB Replica-Set Booking Concurrency Integration Tests', () =>
   beforeAll(async () => {
     const mongoUri = process.env.MONGODB_URI || process.env.MONGODB_TEST_URI;
     if (!mongoUri) {
+      if (isLiveRequested) {
+        throw new Error(
+          'FAIL: Live replica-set testing was explicitly requested via REQUIRE_LIVE_REPLICA, but no MONGODB_URI is configured.',
+        );
+      }
       console.log(
-        '[SKIP: Real MongoDB Replica Set not connected. Set MONGODB_URI to an active replica set to execute live concurrency integration tests.]',
+        '[SKIPPED: Live Replica Set Not Connected - Set MONGODB_URI and REQUIRE_LIVE_REPLICA=true to execute live database tests]',
       );
       return;
     }
@@ -55,7 +65,14 @@ describe('Real MongoDB Replica-Set Booking Concurrency Integration Tests', () =>
       }
 
       if (!isConnectedToReplicaSet) {
-        console.log('[SKIP: Connected MongoDB instance is not a replica set. Transactions required.]');
+        if (isLiveRequested) {
+          throw new Error(
+            'FAIL: Connected MongoDB instance is not a replica set with transaction support.',
+          );
+        }
+        console.log(
+          '[SKIPPED: Connected MongoDB instance is not an active replica set. Transactions required.]',
+        );
         return;
       }
 
@@ -77,7 +94,13 @@ describe('Real MongoDB Replica-Set Booking Concurrency Integration Tests', () =>
         licenseNumber: `LIC-REP-${testSuffix.slice(-6)}`,
         email: `replica-${testSuffix}@hospital.test`,
         phone: '555-0199',
-        address: { street: '100 Replica Way', city: 'Test City', state: 'TS', postalCode: '99999', country: 'USA' },
+        address: {
+          street: '100 Replica Way',
+          city: 'Test City',
+          state: 'TS',
+          postalCode: '99999',
+          country: 'USA',
+        },
         status: 'ACTIVE',
       });
       testHospitalId = hospital._id;
@@ -176,7 +199,13 @@ describe('Real MongoDB Replica-Set Booking Concurrency Integration Tests', () =>
         bloodGroup: 'O+',
         phone: '555-0188',
         emergencyContact: { name: 'Kin', relationship: 'Spouse', phone: '555-0189' },
-        address: { street: '200 Test St', city: 'Test City', state: 'TS', postalCode: '99999', country: 'USA' },
+        address: {
+          street: '200 Test St',
+          city: 'Test City',
+          state: 'TS',
+          postalCode: '99999',
+          country: 'USA',
+        },
       });
       testPatient1Id = patient1._id;
 
@@ -192,7 +221,13 @@ describe('Real MongoDB Replica-Set Booking Concurrency Integration Tests', () =>
         bloodGroup: 'O+',
         phone: '555-0188',
         emergencyContact: { name: 'Parent', relationship: 'Parent', phone: '555-0189' },
-        address: { street: '200 Test St', city: 'Test City', state: 'TS', postalCode: '99999', country: 'USA' },
+        address: {
+          street: '200 Test St',
+          city: 'Test City',
+          state: 'TS',
+          postalCode: '99999',
+          country: 'USA',
+        },
       });
       testPatient2Id = patient2._id;
 
@@ -211,6 +246,9 @@ describe('Real MongoDB Replica-Set Booking Concurrency Integration Tests', () =>
         hospitalId: testHospitalId.toString(),
       });
     } catch (setupErr: any) {
+      if (isLiveRequested) {
+        throw new Error(`FAIL: Real replica set setup failed: ${setupErr.message}`);
+      }
       console.warn('Real replica set setup failed or skipped:', setupErr.message);
     }
   });
@@ -234,6 +272,11 @@ describe('Real MongoDB Replica-Set Booking Concurrency Integration Tests', () =>
   // -------------------------------------------------------------------------
   it('Simultaneous API requests for the same doctor and exact time slot — exactly one succeeds', async () => {
     if (!isConnectedToReplicaSet) {
+      if (isLiveRequested) {
+        throw new Error(
+          'FAIL: Live replica-set testing was explicitly requested, but no active replica set is available.',
+        );
+      }
       console.log('Skipping real replica-set concurrency test: No live replica set connected.');
       return;
     }
@@ -296,6 +339,11 @@ describe('Real MongoDB Replica-Set Booking Concurrency Integration Tests', () =>
   // -------------------------------------------------------------------------
   it('Simultaneous API requests for the same doctor with partial interval overlap — exactly one succeeds', async () => {
     if (!isConnectedToReplicaSet) {
+      if (isLiveRequested) {
+        throw new Error(
+          'FAIL: Live replica-set testing was explicitly requested, but no active replica set is available.',
+        );
+      }
       console.log('Skipping real replica-set partial overlap test: No live replica set connected.');
       return;
     }
@@ -350,6 +398,11 @@ describe('Real MongoDB Replica-Set Booking Concurrency Integration Tests', () =>
   // -------------------------------------------------------------------------
   it('Simultaneous API requests for same patient across sibling profiles for overlapping times with different doctors — exactly one succeeds', async () => {
     if (!isConnectedToReplicaSet) {
+      if (isLiveRequested) {
+        throw new Error(
+          'FAIL: Live replica-set testing was explicitly requested, but no active replica set is available.',
+        );
+      }
       console.log('Skipping real replica-set cross-profile test: No live replica set connected.');
       return;
     }
