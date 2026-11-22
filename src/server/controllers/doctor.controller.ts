@@ -469,6 +469,20 @@ export async function uploadDoctorSignature(
     // Validate payload first
     const validated = signatureUploadSchema.parse(req.body);
 
+    // Verify Data URI MIME matches claimed mimeType if prefix exists
+    const prefixMatch = validated.signatureData.match(/^data:([^;]+);base64,/);
+    if (prefixMatch && prefixMatch[1] !== validated.mimeType) {
+      res.status(400).json({
+        success: false,
+        error: {
+          code: 'MIME_TYPE_MISMATCH',
+          message: `Signature data URI type (${prefixMatch[1]}) does not match specified mimeType (${validated.mimeType})`,
+        },
+        timestamp: new Date().toISOString(),
+      });
+      return;
+    }
+
     // Size limit check (max 500KB = 512,000 bytes)
     const rawData = validated.signatureData.replace(/^data:[^;]+;base64,/, '');
     const byteLength = Buffer.byteLength(rawData, 'base64');
@@ -482,6 +496,63 @@ export async function uploadDoctorSignature(
         timestamp: new Date().toISOString(),
       });
       return;
+    }
+
+    // Deep binary verification & SVG sanitization
+    const buffer = Buffer.from(rawData, 'base64');
+
+    if (validated.mimeType === 'image/png') {
+      const pngMagic = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+      if (buffer.length < 8 || !buffer.subarray(0, 8).equals(pngMagic)) {
+        res.status(400).json({
+          success: false,
+          error: {
+            code: 'INVALID_IMAGE_FORMAT',
+            message: 'Uploaded file does not match PNG signature magic bytes',
+          },
+          timestamp: new Date().toISOString(),
+        });
+        return;
+      }
+    } else if (validated.mimeType === 'image/svg+xml') {
+      const svgContent = buffer.toString('utf8');
+
+      if (!/<svg[\s>]/i.test(svgContent) || !/<\/svg>/i.test(svgContent)) {
+        res.status(400).json({
+          success: false,
+          error: {
+            code: 'INVALID_SVG_FORMAT',
+            message: 'Uploaded file is not a valid SVG document',
+          },
+          timestamp: new Date().toISOString(),
+        });
+        return;
+      }
+
+      const dangerousPatterns = [
+        /<script[\s>]/i,
+        /javascript\s*:/i,
+        /on\w+\s*=/i,
+        /<iframe[\s>]/i,
+        /<embed[\s>]/i,
+        /<object[\s>]/i,
+        /xlink:href\s*=\s*['"]?javascript:/i,
+        /data:text\/html/i,
+      ];
+
+      for (const pattern of dangerousPatterns) {
+        if (pattern.test(svgContent)) {
+          res.status(400).json({
+            success: false,
+            error: {
+              code: 'MALICIOUS_SVG_PAYLOAD',
+              message: 'SVG payload contains prohibited active scripts or executable vectors',
+            },
+            timestamp: new Date().toISOString(),
+          });
+          return;
+        }
+      }
     }
 
     const doctor = await DoctorProfile.findOne({ _id: doctorId, isDeleted: false });

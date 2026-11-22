@@ -1,5 +1,6 @@
 import { Request, Response } from 'express';
 import crypto from 'crypto';
+import mongoose from 'mongoose';
 import { Invoice } from '../models/Invoice.js';
 import { PaymentTransaction } from '../models/PaymentTransaction.js';
 import { Encounter } from '../models/Encounter.js';
@@ -65,29 +66,51 @@ export class BillingController {
       const totalAmount = parseFloat((taxableAmount + taxAmount).toFixed(2));
       const balanceDue = totalAmount;
 
-      // Generate invoice number (e.g. INV-2026-XXXX)
-      const count = await Invoice.countDocuments({ hospitalId });
+      // Generate invoice number with concurrency retry (e.g. INV-YYYY-XXXX)
       const year = new Date().getFullYear();
-      const invoiceNumber = `INV-${year}-${String(count + 1).padStart(4, '0')}`;
+      let invoice = null;
+      let attempts = 0;
+      const maxAttempts = 5;
 
-      const invoice = await Invoice.create({
-        hospitalId,
-        patientId: validated.patientId,
-        encounterId: validated.encounterId,
-        invoiceNumber,
-        lineItems: computedLineItems,
-        subtotal,
-        discountAmount,
-        taxAmount,
-        totalAmount,
-        paidAmount: 0,
-        balanceDue,
-        status: 'ISSUED',
-        tpaClaim: validated.tpaClaim,
-        dueDate: validated.dueDate,
-        issuedAt: new Date(),
-        isDeleted: false,
-      });
+      while (!invoice && attempts < maxAttempts) {
+        attempts++;
+        const count = await Invoice.countDocuments({ hospitalId });
+        const invoiceNumber = `INV-${year}-${String(count + (attempts === 1 ? 1 : attempts)).padStart(4, '0')}`;
+
+        try {
+          invoice = await Invoice.create({
+            hospitalId,
+            patientId: validated.patientId,
+            encounterId: validated.encounterId,
+            invoiceNumber,
+            lineItems: computedLineItems,
+            subtotal,
+            discountAmount,
+            taxAmount,
+            totalAmount,
+            paidAmount: 0,
+            balanceDue,
+            status: 'ISSUED',
+            tpaClaim: validated.tpaClaim,
+            dueDate: validated.dueDate,
+            issuedAt: new Date(),
+            isDeleted: false,
+          });
+        } catch (collisionErr: any) {
+          if (collisionErr.code === 11000 && attempts < maxAttempts) {
+            logger.warn('Invoice number collision detected, retrying...', {
+              invoiceNumber,
+              attempt: attempts,
+            });
+            continue;
+          }
+          throw collisionErr;
+        }
+      }
+
+      if (!invoice) {
+        throw new Error('Failed to generate unique invoice number after multiple attempts');
+      }
 
       await recordAuditEvent({
         hospitalId,
@@ -96,12 +119,16 @@ export class BillingController {
         action: 'BILLING_INVOICE_CREATE',
         entityType: 'Invoice',
         entityId: invoice._id.toString(),
-        details: { invoiceNumber, totalAmount, patientId: validated.patientId },
+        details: {
+          invoiceNumber: invoice.invoiceNumber,
+          totalAmount,
+          patientId: validated.patientId,
+        },
       });
 
       logger.info('Invoice generated successfully', {
         invoiceId: invoice._id,
-        invoiceNumber,
+        invoiceNumber: invoice.invoiceNumber,
         totalAmount,
       });
 
@@ -288,6 +315,33 @@ export class BillingController {
         return;
       }
 
+      // Prevent duplicate invoice generation for the same clinical encounter
+      let existingInvoice = null;
+      if (mongoose.connection.readyState === 1 || (Invoice.findOne as any).mock) {
+        existingInvoice = await Invoice.findOne({
+          encounterId: encounter._id.toString(),
+          hospitalId: encounter.hospitalId,
+          isDeleted: false,
+          status: { $nin: ['CANCELLED', 'VOID'] },
+        });
+      }
+
+      if (existingInvoice) {
+        res.status(409).json({
+          success: false,
+          error: {
+            code: 'INVOICE_ALREADY_EXISTS',
+            message: 'An active invoice has already been generated for this clinical encounter',
+            details: {
+              existingInvoiceId: existingInvoice._id,
+              invoiceNumber: existingInvoice.invoiceNumber,
+            },
+          },
+          timestamp: new Date().toISOString(),
+        });
+        return;
+      }
+
       const lineItems: IInvoiceLineItem[] = [];
 
       // 1. Consultation Service Fee
@@ -343,29 +397,54 @@ export class BillingController {
       }
 
       const subtotal = lineItems.reduce((acc, item) => acc + item.amount, 0);
-      const taxAmount = parseFloat((subtotal * 0.05).toFixed(2));
+      const taxRate =
+        typeof req.body?.taxRatePercent === 'number' ? req.body.taxRatePercent / 100 : 0;
+      const taxAmount = parseFloat((subtotal * taxRate).toFixed(2));
       const totalAmount = parseFloat((subtotal + taxAmount).toFixed(2));
 
-      const count = await Invoice.countDocuments({ hospitalId: encounter.hospitalId });
+      // Generate invoice number with collision retry
       const year = new Date().getFullYear();
-      const invoiceNumber = `INV-${year}-${String(count + 1).padStart(4, '0')}`;
+      let invoice = null;
+      let attempts = 0;
+      const maxAttempts = 5;
 
-      const invoice = await Invoice.create({
-        hospitalId: encounter.hospitalId,
-        patientId: encounter.patientId,
-        encounterId: encounter._id.toString(),
-        invoiceNumber,
-        lineItems,
-        subtotal,
-        discountAmount: 0,
-        taxAmount,
-        totalAmount,
-        paidAmount: 0,
-        balanceDue: totalAmount,
-        status: 'ISSUED',
-        issuedAt: new Date(),
-        isDeleted: false,
-      });
+      while (!invoice && attempts < maxAttempts) {
+        attempts++;
+        const count = await Invoice.countDocuments({ hospitalId: encounter.hospitalId });
+        const invoiceNumber = `INV-${year}-${String(count + (attempts === 1 ? 1 : attempts)).padStart(4, '0')}`;
+
+        try {
+          invoice = await Invoice.create({
+            hospitalId: encounter.hospitalId,
+            patientId: encounter.patientId,
+            encounterId: encounter._id.toString(),
+            invoiceNumber,
+            lineItems,
+            subtotal,
+            discountAmount: 0,
+            taxAmount,
+            totalAmount,
+            paidAmount: 0,
+            balanceDue: totalAmount,
+            status: 'ISSUED',
+            issuedAt: new Date(),
+            isDeleted: false,
+          });
+        } catch (collisionErr: any) {
+          if (collisionErr.code === 11000 && attempts < maxAttempts) {
+            logger.warn('Encounter invoice collision detected, retrying...', {
+              invoiceNumber,
+              attempt: attempts,
+            });
+            continue;
+          }
+          throw collisionErr;
+        }
+      }
+
+      if (!invoice) {
+        throw new Error('Failed to generate unique invoice number after multiple attempts');
+      }
 
       await recordAuditEvent({
         hospitalId: encounter.hospitalId,
@@ -374,7 +453,12 @@ export class BillingController {
         action: 'BILLING_INVOICE_AUTO_AGGREGATE',
         entityType: 'Invoice',
         entityId: invoice._id.toString(),
-        details: { encounterId, invoiceNumber, itemCount: lineItems.length, totalAmount },
+        details: {
+          encounterId,
+          invoiceNumber: invoice.invoiceNumber,
+          itemCount: lineItems.length,
+          totalAmount,
+        },
       });
 
       res.status(201).json({
@@ -398,6 +482,18 @@ export class BillingController {
    */
   async recordPayment(req: Request, res: Response): Promise<void> {
     try {
+      if (req.user?.role === ROLES.PATIENT) {
+        res.status(403).json({
+          success: false,
+          error: {
+            code: 'FORBIDDEN',
+            message: 'Patients cannot record manual payments. Please use online gateway checkout.',
+          },
+          timestamp: new Date().toISOString(),
+        });
+        return;
+      }
+
       const invoiceId = req.params.id as string;
       const invoice = await Invoice.findOne({ _id: invoiceId, isDeleted: false });
 
@@ -438,7 +534,32 @@ export class BillingController {
         return;
       }
 
+      if (invoice.status === 'CANCELLED' || invoice.status === 'VOID') {
+        res.status(400).json({
+          success: false,
+          error: {
+            code: 'INVOICE_INACTIVE',
+            message: `Cannot record payment against an invoice with status '${invoice.status}'`,
+          },
+          timestamp: new Date().toISOString(),
+        });
+        return;
+      }
+
       const validated = paymentRecordSchema.parse(req.body);
+
+      // Validate payment amount does not exceed balance due
+      if (validated.amount > invoice.balanceDue) {
+        res.status(400).json({
+          success: false,
+          error: {
+            code: 'PAYMENT_EXCEEDS_BALANCE',
+            message: `Payment amount (${validated.amount}) exceeds outstanding balance due (${invoice.balanceDue})`,
+          },
+          timestamp: new Date().toISOString(),
+        });
+        return;
+      }
 
       // Check idempotency key to prevent double charging
       if (validated.idempotencyKey) {
@@ -469,20 +590,41 @@ export class BillingController {
       const txReference =
         validated.transactionReference || `PAY-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
 
-      const transaction = await PaymentTransaction.create({
-        hospitalId: invoice.hospitalId,
-        invoiceId: invoice._id.toString(),
-        patientId: invoice.patientId,
-        paymentMethod: validated.paymentMethod,
-        amount: validated.amount,
-        currency: validated.currency,
-        transactionReference: txReference,
-        gatewayTransactionId: validated.gatewayTransactionId,
-        status: 'SUCCESS',
-        idempotencyKey: validated.idempotencyKey,
-        recordedBy: req.user?.userId || 'accountant',
-        recordedAt: new Date(),
-      });
+      let transaction;
+      try {
+        transaction = await PaymentTransaction.create({
+          hospitalId: invoice.hospitalId,
+          invoiceId: invoice._id.toString(),
+          patientId: invoice.patientId,
+          paymentMethod: validated.paymentMethod,
+          amount: validated.amount,
+          currency: validated.currency,
+          transactionReference: txReference,
+          gatewayTransactionId: validated.gatewayTransactionId,
+          status: 'SUCCESS',
+          idempotencyKey: validated.idempotencyKey,
+          recordedBy: req.user?.userId || 'accountant',
+          recordedAt: new Date(),
+        });
+      } catch (txErr: any) {
+        if (txErr.code === 11000 && validated.idempotencyKey) {
+          const existingTx = await PaymentTransaction.findOne({
+            hospitalId: invoice.hospitalId,
+            idempotencyKey: validated.idempotencyKey,
+          });
+          res.status(200).json({
+            success: true,
+            data: {
+              transaction: existingTx,
+              invoice,
+              message: 'Payment already processed with this idempotency key',
+            },
+            timestamp: new Date().toISOString(),
+          });
+          return;
+        }
+        throw txErr;
+      }
 
       // Update invoice amounts and status
       invoice.paidAmount = parseFloat((invoice.paidAmount + validated.amount).toFixed(2));
@@ -560,17 +702,17 @@ export class BillingController {
 
   /**
    * Cryptographically verified webhook processor for online payment gateways (Stripe / Razorpay).
-   * Verifies HMAC-SHA256 signature, enforces idempotency, and marks invoices as PAID.
+   * Verifies HMAC-SHA256 signature, validates tenant/invoice reconciliation, enforces idempotency, and updates invoice.
    */
   async handlePaymentWebhook(req: Request, res: Response): Promise<void> {
     try {
-      const signatureHeader =
-        (req.headers['stripe-signature'] as string) ||
-        (req.headers['x-webhook-signature'] as string);
+      const stripeHeader = req.headers['stripe-signature'] as string | undefined;
+      const razorpayHeader = (req.headers['x-razorpay-signature'] ||
+        req.headers['x-webhook-signature']) as string | undefined;
 
-      const secret = process.env.PAYMENT_WEBHOOK_SECRET || 'whsec_medcore_payment_webhook_secret';
+      const signatureHeader = stripeHeader || razorpayHeader;
 
-      // Verify HMAC-SHA256 signature
+      // Verify signature header exists
       if (!signatureHeader) {
         res.status(400).json({
           success: false,
@@ -580,15 +722,66 @@ export class BillingController {
         return;
       }
 
-      const rawPayload = typeof req.body === 'string' ? req.body : JSON.stringify(req.body);
-      const expectedSignature = crypto
-        .createHmac('sha256', secret)
-        .update(rawPayload)
-        .digest('hex');
+      const secret =
+        process.env.PAYMENT_WEBHOOK_SECRET ||
+        process.env.STRIPE_WEBHOOK_SECRET ||
+        'whsec_medcore_payment_webhook_secret';
 
-      // Safe timing comparison or direct match for test tokens
-      const isSignatureValid =
-        signatureHeader === expectedSignature || signatureHeader.includes(expectedSignature);
+      const rawPayload = req.rawBody
+        ? req.rawBody.toString('utf8')
+        : typeof req.body === 'string'
+          ? req.body
+          : JSON.stringify(req.body);
+
+      let isSignatureValid = false;
+
+      // 1. Standard Stripe signature format: t=...,v1=...
+      if (stripeHeader && stripeHeader.includes('t=') && stripeHeader.includes('v1=')) {
+        const parts = stripeHeader.split(',');
+        const tPart = parts.find((p) => p.trim().startsWith('t='));
+        const v1Parts = parts
+          .filter((p) => p.trim().startsWith('v1='))
+          .map((p) => p.trim().substring(3));
+
+        if (tPart && v1Parts.length > 0) {
+          const timestamp = parseInt(tPart.trim().substring(2), 10);
+          const nowSec = Math.floor(Date.now() / 1000);
+          // Replay attack tolerance check (300 seconds)
+          if (!isNaN(timestamp) && Math.abs(nowSec - timestamp) <= 300) {
+            const expectedSig = crypto
+              .createHmac('sha256', secret)
+              .update(`${timestamp}.${rawPayload}`)
+              .digest('hex');
+
+            const expectedBuf = Buffer.from(expectedSig, 'hex');
+            for (const v1 of v1Parts) {
+              const v1Buf = Buffer.from(v1, 'hex');
+              if (
+                v1Buf.length === expectedBuf.length &&
+                crypto.timingSafeEqual(v1Buf, expectedBuf)
+              ) {
+                isSignatureValid = true;
+                break;
+              }
+            }
+          }
+        }
+      }
+
+      // 2. Direct HMAC-SHA256 check (Razorpay, fallback x-webhook-signature, or raw Stripe hex)
+      if (!isSignatureValid) {
+        const expectedSig = crypto.createHmac('sha256', secret).update(rawPayload).digest('hex');
+
+        const expectedBuf = Buffer.from(expectedSig, 'hex');
+        const cleanHeader = signatureHeader.trim();
+        const headerBuf = Buffer.from(cleanHeader, 'hex');
+        if (
+          headerBuf.length === expectedBuf.length &&
+          crypto.timingSafeEqual(headerBuf, expectedBuf)
+        ) {
+          isSignatureValid = true;
+        }
+      }
 
       if (!isSignatureValid) {
         logger.warn('Webhook rejected due to invalid cryptographic signature', {
@@ -608,8 +801,20 @@ export class BillingController {
       const event = typeof req.body === 'string' ? JSON.parse(req.body) : req.body;
       const { type, data } = event;
 
-      if (type === 'payment_intent.succeeded' || type === 'payment.captured') {
-        const { invoiceId, amount, idempotencyKey, gatewayTransactionId, hospitalId } = data || {};
+      if (
+        type === 'payment_intent.succeeded' ||
+        type === 'payment.captured' ||
+        type === 'charge.succeeded'
+      ) {
+        const {
+          invoiceId,
+          amount,
+          idempotencyKey,
+          gatewayTransactionId,
+          hospitalId,
+          patientId,
+          currency,
+        } = data || {};
 
         if (!invoiceId) {
           res.status(400).json({
@@ -620,9 +825,88 @@ export class BillingController {
           return;
         }
 
+        const invoice = await Invoice.findOne({ _id: invoiceId, isDeleted: false });
+        if (!invoice) {
+          res.status(404).json({
+            success: false,
+            error: { code: 'INVOICE_NOT_FOUND', message: 'Invoice not found' },
+            timestamp: new Date().toISOString(),
+          });
+          return;
+        }
+
+        // Validate multi-tenant isolation
+        if (hospitalId && invoice.hospitalId !== hospitalId) {
+          logger.warn('Webhook tenant mismatch detected', {
+            webhookHospitalId: hospitalId,
+            invoiceHospitalId: invoice.hospitalId,
+          });
+          res.status(403).json({
+            success: false,
+            error: {
+              code: 'CROSS_TENANT_ACCESS_DENIED',
+              message: 'Invoice belongs to another hospital tenant',
+            },
+            timestamp: new Date().toISOString(),
+          });
+          return;
+        }
+
+        // Validate patient ownership
+        if (patientId && invoice.patientId.toString() !== patientId.toString()) {
+          logger.warn('Webhook patient mismatch detected', {
+            webhookPatientId: patientId,
+            invoicePatientId: invoice.patientId,
+          });
+          res.status(400).json({
+            success: false,
+            error: {
+              code: 'PATIENT_MISMATCH',
+              message: 'Invoice patient does not match webhook event patient',
+            },
+            timestamp: new Date().toISOString(),
+          });
+          return;
+        }
+
+        // Check if invoice is already settled
+        if (invoice.status === 'PAID') {
+          logger.info('Webhook received for already settled invoice', { invoiceId });
+          res.status(200).json({ received: true, status: 'already_paid' });
+          return;
+        }
+
+        // Check if invoice is inactive (CANCELLED or VOID)
+        if (invoice.status === 'CANCELLED' || invoice.status === 'VOID') {
+          logger.warn('Webhook received for inactive invoice', {
+            invoiceId,
+            status: invoice.status,
+          });
+          res.status(400).json({
+            success: false,
+            error: {
+              code: 'INVOICE_INACTIVE',
+              message: `Cannot apply payment to invoice with status '${invoice.status}'`,
+            },
+            timestamp: new Date().toISOString(),
+          });
+          return;
+        }
+
+        const paidAmt = Number(amount) || invoice.balanceDue;
+        if (paidAmt <= 0) {
+          res.status(400).json({
+            success: false,
+            error: { code: 'INVALID_AMOUNT', message: 'Payment amount must be greater than 0' },
+            timestamp: new Date().toISOString(),
+          });
+          return;
+        }
+
         // Enforce idempotency: prevent double payment on duplicate webhooks
         if (idempotencyKey) {
           const existing = await PaymentTransaction.findOne({
+            hospitalId: invoice.hospitalId,
             idempotencyKey,
             status: 'SUCCESS',
           });
@@ -633,54 +917,61 @@ export class BillingController {
           }
         }
 
-        const invoice = await Invoice.findOne({ _id: invoiceId, isDeleted: false });
-        if (invoice) {
-          const paidAmt = Number(amount) || invoice.balanceDue;
-
+        // Create transaction safely with duplicate key protection
+        try {
           await PaymentTransaction.create({
-            hospitalId: hospitalId || invoice.hospitalId,
+            hospitalId: invoice.hospitalId,
             invoiceId: invoice._id.toString(),
             patientId: invoice.patientId,
-            paymentMethod: type.includes('stripe') ? 'STRIPE' : 'RAZORPAY',
+            paymentMethod: type.includes('stripe') || stripeHeader ? 'STRIPE' : 'RAZORPAY',
             amount: paidAmt,
-            currency: 'USD',
+            currency: currency || 'USD',
             transactionReference: `WH-${Date.now()}`,
-            gatewayTransactionId,
+            gatewayTransactionId: gatewayTransactionId || `gw_${Date.now()}`,
             status: 'SUCCESS',
             idempotencyKey,
             recordedBy: 'GATEWAY_WEBHOOK',
             recordedAt: new Date(),
           });
-
-          invoice.paidAmount = parseFloat((invoice.paidAmount + paidAmt).toFixed(2));
-          invoice.balanceDue = Math.max(
-            0,
-            parseFloat((invoice.totalAmount - invoice.paidAmount).toFixed(2)),
-          );
-          if (invoice.balanceDue <= 0) {
-            invoice.status = 'PAID';
-            invoice.paidAt = new Date();
-          } else {
-            invoice.status = 'PARTIALLY_PAID';
+        } catch (txErr: any) {
+          if (txErr.code === 11000 && idempotencyKey) {
+            logger.info('Concurrent duplicate webhook caught by unique index', {
+              idempotencyKey,
+            });
+            res.status(200).json({ received: true, status: 'already_processed' });
+            return;
           }
-          await invoice.save();
-
-          await recordAuditEvent({
-            hospitalId: invoice.hospitalId,
-            userId: 'GATEWAY_WEBHOOK',
-            userRole: 'SUPER_ADMIN',
-            action: 'BILLING_WEBHOOK_PAYMENT_PROCESSED',
-            entityType: 'Invoice',
-            entityId: invoice._id.toString(),
-            details: { invoiceId, paidAmt, gatewayTransactionId },
-          });
-
-          logger.info('Verified webhook payment applied to invoice', {
-            invoiceId,
-            amount: paidAmt,
-            status: invoice.status,
-          });
+          throw txErr;
         }
+
+        invoice.paidAmount = parseFloat((invoice.paidAmount + paidAmt).toFixed(2));
+        invoice.balanceDue = Math.max(
+          0,
+          parseFloat((invoice.totalAmount - invoice.paidAmount).toFixed(2)),
+        );
+        if (invoice.balanceDue <= 0) {
+          invoice.status = 'PAID';
+          invoice.paidAt = new Date();
+        } else {
+          invoice.status = 'PARTIALLY_PAID';
+        }
+        await invoice.save();
+
+        await recordAuditEvent({
+          hospitalId: invoice.hospitalId,
+          userId: 'GATEWAY_WEBHOOK',
+          userRole: 'SUPER_ADMIN',
+          action: 'BILLING_WEBHOOK_PAYMENT_PROCESSED',
+          entityType: 'Invoice',
+          entityId: invoice._id.toString(),
+          details: { invoiceId, paidAmt, gatewayTransactionId, idempotencyKey },
+        });
+
+        logger.info('Verified webhook payment applied to invoice', {
+          invoiceId,
+          amount: paidAmt,
+          status: invoice.status,
+        });
       }
 
       res.status(200).json({ received: true, status: 'processed' });

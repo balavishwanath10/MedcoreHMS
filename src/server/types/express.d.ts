@@ -6,6 +6,7 @@ declare global {
       user?: TokenPayload;
       hospitalId?: string;
       targetHospitalId?: string;
+      rawBody?: Buffer;
     }
   }
 }

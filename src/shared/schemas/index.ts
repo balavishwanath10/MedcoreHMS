@@ -676,6 +676,7 @@ export const dispenseItemInputSchema = z.object({
 
 export const dispensePrescriptionSchema = z.object({
   items: z.array(dispenseItemInputSchema).optional(),
+  strategy: z.enum(['FEFO', 'FIFO']).default('FEFO').optional(),
   notes: z.string().trim().max(1000).optional(),
 });
 
@@ -734,7 +735,7 @@ export const invoiceCreateSchema = z.object({
   encounterId: z.string().optional(),
   lineItems: z.array(invoiceLineItemSchema).min(1, 'Invoice must contain at least one line item'),
   discountAmount: z.number().min(0).default(0),
-  taxRatePercent: z.number().min(0).max(100).default(5),
+  taxRatePercent: z.number().min(0).max(100).default(0),
   tpaClaim: tpaClaimSchema.optional(),
   dueDate: z.coerce.date().optional(),
 });

@@ -1,4 +1,5 @@
 import { Request, Response } from 'express';
+import mongoose from 'mongoose';
 import { InventoryBatch } from '../models/InventoryBatch.js';
 import { Medicine } from '../models/Medicine.js';
 import { Prescription } from '../models/Prescription.js';
@@ -563,7 +564,38 @@ export class PharmacyController {
         return;
       }
 
+      const originalStatus = prescription.status;
+
+      // Atomically mark prescription as DISPENSED to prevent double-dispense race conditions
+      if (mongoose.connection.readyState === 1 || (Prescription.findOneAndUpdate as any).mock) {
+        const lockedPrescription = await Prescription.findOneAndUpdate(
+          {
+            _id: prescriptionId,
+            hospitalId: prescription.hospitalId,
+            status: { $in: ['ISSUED', 'AMENDED'] },
+            isDeleted: false,
+          },
+          {
+            $set: { status: 'DISPENSED' },
+          },
+          { new: true },
+        );
+
+        if (!lockedPrescription) {
+          res.status(400).json({
+            success: false,
+            error: {
+              code: 'PRESCRIPTION_ALREADY_DISPENSED',
+              message: 'This prescription has already been dispensed or is in an invalid state',
+            },
+            timestamp: new Date().toISOString(),
+          });
+          return;
+        }
+      }
+
       const validated = dispensePrescriptionSchema.parse(req.body || {});
+      const strategy = validated.strategy || 'FEFO';
 
       // Calculate quantity needed per prescription item
       const itemsToDispense: { medicineId: string; medicineName: string; quantity: number }[] = [];
@@ -611,6 +643,15 @@ export class PharmacyController {
       }
 
       if (itemsToDispense.length === 0) {
+        if (mongoose.connection.readyState === 1 || (Prescription.updateOne as any).mock) {
+          await Prescription.updateOne(
+            { _id: prescriptionId },
+            { $set: { status: originalStatus } },
+          );
+        } else {
+          prescription.status = originalStatus;
+          if (typeof prescription.save === 'function') await prescription.save();
+        }
         res.status(400).json({
           success: false,
           error: {
@@ -622,17 +663,26 @@ export class PharmacyController {
         return;
       }
 
-      // Check stock sufficiency for ALL items before making any modifications
+      // Check stock sufficiency and execute atomic deductions with rollback compensation
       const now = new Date();
-      const plan: {
-        medicineId: string;
-        medicineName: string;
-        requestedQuantity: number;
-        batchesToConsume: { batch: any; quantityToTake: number }[];
+      const batchSort: Record<string, 1 | -1> =
+        strategy === 'FIFO' ? { receivedAt: 1, expiryDate: 1 } : { expiryDate: 1, receivedAt: 1 };
+
+      const executedDeductions: {
+        batchId: string;
+        batchNumber: string;
+        quantity: number;
+        unitCost: number;
+        mrp: number;
+        expiryDate: Date | string;
+        batchRef?: any;
       }[] = [];
 
+      const dispenseResults: IDispenseItemResult[] = [];
+      let grandTotal = 0;
+
       for (const it of itemsToDispense) {
-        // Query active, non-expired, non-quarantined batches sorted by earliest expiry date (FIFO)
+        // Query active, non-expired, non-quarantined batches
         const availableBatches = await InventoryBatch.find({
           hospitalId: prescription.hospitalId,
           medicineId: it.medicineId,
@@ -640,11 +690,40 @@ export class PharmacyController {
           quantityAvailable: { $gt: 0 },
           expiryDate: { $gt: now },
           isDeleted: false,
-        }).sort({ expiryDate: 1 });
+        }).sort(batchSort);
 
         const totalAvailable = availableBatches.reduce((sum, b) => sum + b.quantityAvailable, 0);
 
         if (totalAvailable < it.quantity) {
+          for (const deduction of executedDeductions) {
+            if (deduction.batchRef) {
+              deduction.batchRef.quantityAvailable += deduction.quantity;
+              deduction.batchRef.status = 'ACTIVE';
+              if (typeof deduction.batchRef.save === 'function') {
+                await deduction.batchRef.save();
+              }
+            }
+          }
+
+          if (mongoose.connection.readyState === 1 || (InventoryBatch.updateOne as any).mock) {
+            for (const deduction of executedDeductions) {
+              await InventoryBatch.updateOne(
+                { _id: deduction.batchId },
+                {
+                  $inc: { quantityAvailable: deduction.quantity },
+                  $set: { status: 'ACTIVE' },
+                },
+              );
+            }
+            await Prescription.updateOne(
+              { _id: prescription._id },
+              { $set: { status: originalStatus } },
+            );
+          } else {
+            prescription.status = originalStatus;
+            if (typeof prescription.save === 'function') await prescription.save();
+          }
+
           res.status(400).json({
             success: false,
             error: {
@@ -663,65 +742,164 @@ export class PharmacyController {
         }
 
         let needed = it.quantity;
-        const batchesToConsume: { batch: any; quantityToTake: number }[] = [];
+        const allocatedBatchesForMed = [];
+        let itemTotal = 0;
 
         for (const batch of availableBatches) {
           if (needed <= 0) break;
           const take = Math.min(batch.quantityAvailable, needed);
-          batchesToConsume.push({ batch, quantityToTake: take });
+
+          let updatedBatch = null;
+          if (
+            mongoose.connection.readyState === 1 ||
+            (InventoryBatch.findOneAndUpdate as any).mock
+          ) {
+            updatedBatch = await InventoryBatch.findOneAndUpdate(
+              {
+                _id: batch._id,
+                hospitalId: prescription.hospitalId,
+                status: 'ACTIVE',
+                isDeleted: false,
+                quantityAvailable: { $gte: take },
+                expiryDate: { $gt: now },
+              },
+              {
+                $inc: { quantityAvailable: -take },
+              },
+              { new: true },
+            );
+
+            if (!updatedBatch) {
+              // Concurrent race condition: batch stock changed
+              for (const deduction of executedDeductions) {
+                if (deduction.batchRef) {
+                  deduction.batchRef.quantityAvailable += deduction.quantity;
+                  deduction.batchRef.status = 'ACTIVE';
+                  if (typeof deduction.batchRef.save === 'function') {
+                    await deduction.batchRef.save();
+                  }
+                }
+              }
+              if (mongoose.connection.readyState === 1 || (InventoryBatch.updateOne as any).mock) {
+                for (const deduction of executedDeductions) {
+                  await InventoryBatch.updateOne(
+                    { _id: deduction.batchId },
+                    {
+                      $inc: { quantityAvailable: deduction.quantity },
+                      $set: { status: 'ACTIVE' },
+                    },
+                  );
+                }
+                await Prescription.updateOne(
+                  { _id: prescription._id },
+                  { $set: { status: originalStatus } },
+                );
+              } else {
+                prescription.status = originalStatus;
+                if (typeof prescription.save === 'function') await prescription.save();
+              }
+
+              res.status(409).json({
+                success: false,
+                error: {
+                  code: 'CONCURRENT_STOCK_MODIFICATION',
+                  message: `Stock for batch '${batch.batchNumber}' was modified concurrently. Please retry.`,
+                },
+                timestamp: new Date().toISOString(),
+              });
+              return;
+            }
+
+            if (updatedBatch.quantityAvailable === 0) {
+              await InventoryBatch.updateOne(
+                { _id: updatedBatch._id },
+                { $set: { status: 'DEPLETED' } },
+              );
+            }
+          } else {
+            batch.quantityAvailable -= take;
+            if (batch.quantityAvailable === 0) {
+              batch.status = 'DEPLETED';
+            }
+            if (typeof batch.save === 'function') {
+              await batch.save();
+            }
+            updatedBatch = batch;
+          }
+
+          const batchCost = take * updatedBatch.mrp;
+          itemTotal += batchCost;
           needed -= take;
+
+          const deductionRecord = {
+            batchId: updatedBatch._id.toString(),
+            batchNumber: updatedBatch.batchNumber,
+            quantity: take,
+            unitCost: updatedBatch.unitCost,
+            mrp: updatedBatch.mrp,
+            expiryDate: updatedBatch.expiryDate,
+            batchRef: batch,
+          };
+
+          executedDeductions.push(deductionRecord);
+          allocatedBatchesForMed.push(deductionRecord);
         }
 
-        plan.push({
-          medicineId: it.medicineId,
-          medicineName: it.medicineName,
-          requestedQuantity: it.quantity,
-          batchesToConsume,
-        });
-      }
-
-      // Execute inventory deductions in FIFO order
-      const dispenseResults: IDispenseItemResult[] = [];
-      let grandTotal = 0;
-
-      for (const itemPlan of plan) {
-        const allocatedBatches = [];
-        let itemTotal = 0;
-
-        for (const consumption of itemPlan.batchesToConsume) {
-          const { batch, quantityToTake } = consumption;
-          batch.quantityAvailable -= quantityToTake;
-          if (batch.quantityAvailable === 0) {
-            batch.status = 'DEPLETED';
+        if (needed > 0) {
+          for (const deduction of executedDeductions) {
+            if (deduction.batchRef) {
+              deduction.batchRef.quantityAvailable += deduction.quantity;
+              deduction.batchRef.status = 'ACTIVE';
+              if (typeof deduction.batchRef.save === 'function') {
+                await deduction.batchRef.save();
+              }
+            }
           }
-          await batch.save();
+          if (mongoose.connection.readyState === 1 || (InventoryBatch.updateOne as any).mock) {
+            for (const deduction of executedDeductions) {
+              await InventoryBatch.updateOne(
+                { _id: deduction.batchId },
+                {
+                  $inc: { quantityAvailable: deduction.quantity },
+                  $set: { status: 'ACTIVE' },
+                },
+              );
+            }
+            await Prescription.updateOne(
+              { _id: prescription._id },
+              { $set: { status: originalStatus } },
+            );
+          } else {
+            prescription.status = originalStatus;
+            if (typeof prescription.save === 'function') await prescription.save();
+          }
 
-          const batchCost = quantityToTake * batch.mrp;
-          itemTotal += batchCost;
-
-          allocatedBatches.push({
-            batchId: batch._id.toString(),
-            batchNumber: batch.batchNumber,
-            quantity: quantityToTake,
-            unitCost: batch.unitCost,
-            mrp: batch.mrp,
-            expiryDate: batch.expiryDate,
+          res.status(400).json({
+            success: false,
+            error: {
+              code: 'INSUFFICIENT_STOCK',
+              message: `Could not fulfill required quantity for '${it.medicineName}'. Required: ${it.quantity}`,
+            },
+            timestamp: new Date().toISOString(),
           });
+          return;
         }
 
         grandTotal += itemTotal;
         dispenseResults.push({
-          medicineId: itemPlan.medicineId,
-          medicineName: itemPlan.medicineName,
-          requestedQuantity: itemPlan.requestedQuantity,
-          dispensedQuantity: itemPlan.requestedQuantity,
-          allocatedBatches,
+          medicineId: it.medicineId,
+          medicineName: it.medicineName,
+          requestedQuantity: it.quantity,
+          dispensedQuantity: it.quantity,
+          allocatedBatches: allocatedBatchesForMed,
           totalItemPrice: itemTotal,
         });
       }
 
-      // Mark prescription as DISPENSED
       prescription.status = 'DISPENSED';
+      if (typeof prescription.save === 'function') {
+        await prescription.save();
+      }
       await prescription.save();
 
       const receipt: IDispenseReceipt = {

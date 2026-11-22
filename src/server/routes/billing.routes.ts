@@ -45,18 +45,12 @@ router.post(
   billingController.generateFromEncounter.bind(billingController),
 );
 
-// Payment recording (Accountants, Receptionists, Hospital Admins, Super Admins, Patients)
+// Payment recording (Accountants, Receptionists, Hospital Admins, Super Admins)
 router.post(
   '/invoices/:id/payments',
   authenticateToken,
   requireTenant,
-  requireRole(
-    ROLES.ACCOUNTANT,
-    ROLES.RECEPTIONIST,
-    ROLES.HOSPITAL_ADMIN,
-    ROLES.SUPER_ADMIN,
-    ROLES.PATIENT,
-  ),
+  requireRole(ROLES.ACCOUNTANT, ROLES.RECEPTIONIST, ROLES.HOSPITAL_ADMIN, ROLES.SUPER_ADMIN),
   billingController.recordPayment.bind(billingController),
 );
 

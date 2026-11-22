@@ -562,6 +562,7 @@ export interface IInventoryBatch {
   reorderThreshold: number;
   locationRack?: string;
   supplier?: string;
+  receivedAt?: string | Date;
   isDeleted: boolean;
   createdAt?: string | Date;
   updatedAt?: string | Date;

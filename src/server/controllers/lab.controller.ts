@@ -769,7 +769,7 @@ export class LabController {
         hospitalId: order.hospitalId,
       });
 
-      // Automatically evaluate each parameter result
+      // Automatically evaluate each parameter result using authoritative catalogue reference ranges
       const enrichedResults = validated.results.map((param) => {
         let minNormal = param.referenceRangeMin;
         let maxNormal = param.referenceRangeMax;
@@ -780,9 +780,10 @@ export class LabController {
             (r) => r.parameterName.toLowerCase() === param.parameterName.toLowerCase(),
           );
           if (matchRange) {
-            if (minNormal === undefined) minNormal = matchRange.minNormal;
-            if (maxNormal === undefined) maxNormal = matchRange.maxNormal;
-            if (!textRange) textRange = matchRange.textRange;
+            // Authoritative catalogue values take precedence over client input to prevent abnormal flag tampering
+            minNormal = matchRange.minNormal;
+            maxNormal = matchRange.maxNormal;
+            textRange = matchRange.textRange || textRange;
           }
         }
 

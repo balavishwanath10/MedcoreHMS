@@ -78,6 +78,11 @@ const InventoryBatchSchema = new Schema<InventoryBatchDocument>(
       trim: true,
       maxlength: 200,
     },
+    receivedAt: {
+      type: Date,
+      default: Date.now,
+      index: true,
+    },
     isDeleted: {
       type: Boolean,
       default: false,
@@ -89,8 +94,9 @@ const InventoryBatchSchema = new Schema<InventoryBatchDocument>(
   },
 );
 
-// Compound indexes for FIFO sorting and efficient multi-tenant querying
-InventoryBatchSchema.index({ hospitalId: 1, medicineId: 1, expiryDate: 1 });
+// Compound indexes for FEFO & FIFO sorting and efficient multi-tenant querying
+InventoryBatchSchema.index({ hospitalId: 1, medicineId: 1, expiryDate: 1, receivedAt: 1 });
+InventoryBatchSchema.index({ hospitalId: 1, medicineId: 1, receivedAt: 1, expiryDate: 1 });
 InventoryBatchSchema.index({ hospitalId: 1, status: 1, expiryDate: 1 });
 InventoryBatchSchema.index({ hospitalId: 1, batchNumber: 1, medicineId: 1 }, { unique: true });
 
