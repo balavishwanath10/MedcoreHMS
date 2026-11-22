@@ -524,3 +524,77 @@ export const signatureUploadSchema = z.object({
 export const prescriptionSignSchema = z.object({
   signatureData: z.string().optional(),
 });
+
+// ==========================================
+// Laboratory Diagnostic Schemas (Day 15 & 16)
+// ==========================================
+
+export const labTestCategories = [
+  'Hematology',
+  'Biochemistry',
+  'Microbiology',
+  'Pathology',
+  'Immunology',
+  'Radiology',
+  'Other',
+] as const;
+
+export const labSampleTypes = [
+  'Blood',
+  'Serum',
+  'Plasma',
+  'Urine',
+  'Sputum',
+  'Stool',
+  'Swab',
+  'Tissue',
+  'CSF',
+  'Other',
+] as const;
+
+export const labOrderPriorities = ['ROUTINE', 'URGENT', 'STAT'] as const;
+
+export const labOrderStatuses = [
+  'ORDERED',
+  'SAMPLE_COLLECTED',
+  'IN_PROGRESS',
+  'COMPLETED',
+  'CANCELLED',
+] as const;
+
+export const labTestReferenceRangeSchema = z.object({
+  parameterName: z.string().trim().min(1, 'Parameter name is required'),
+  unit: z.string().trim().min(1, 'Unit of measurement is required'),
+  minNormal: z.number().optional(),
+  maxNormal: z.number().optional(),
+  textRange: z.string().trim().optional(),
+  genderSpecific: z.enum(['MALE', 'FEMALE', 'ALL']).default('ALL'),
+  ageMinYears: z.number().int().min(0).optional(),
+  ageMaxYears: z.number().int().min(0).optional(),
+});
+
+export const labTestCreateSchema = z.object({
+  hospitalId: z.string().min(1, 'Hospital ID is required'),
+  code: z.string().trim().min(2, 'Test code is required').max(30).toUpperCase(),
+  name: z.string().trim().min(2, 'Test name is required').max(200),
+  category: z.enum(labTestCategories),
+  sampleType: z.enum(labSampleTypes),
+  turnaroundTimeHours: z.number().int().min(1).default(24),
+  price: z.number().min(0, 'Price cannot be negative').default(0),
+  referenceRanges: z.array(labTestReferenceRangeSchema).default([]),
+  isActive: z.boolean().default(true),
+});
+
+export const labOrderCreateSchema = z.object({
+  hospitalId: z.string().min(1, 'Hospital ID is required'),
+  patientId: z.string().min(1, 'Patient ID is required'),
+  doctorId: z.string().min(1, 'Doctor ID is required'),
+  encounterId: z.string().optional(),
+  testIds: z.array(z.string().min(1)).min(1, 'At least one test must be ordered'),
+  priority: z.enum(labOrderPriorities).default('ROUTINE'),
+  clinicalNotes: z.string().trim().max(1000).optional(),
+});
+
+export const sampleCollectedSchema = z.object({
+  notes: z.string().trim().max(500).optional(),
+});

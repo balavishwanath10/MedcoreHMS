@@ -426,3 +426,79 @@ export interface HealthCheckData {
     name?: string;
   };
 }
+
+// ==========================================
+// Laboratory Diagnostic System Types (Day 15 & 16)
+// ==========================================
+
+export type LabTestCategory =
+  | 'Hematology'
+  | 'Biochemistry'
+  | 'Microbiology'
+  | 'Pathology'
+  | 'Immunology'
+  | 'Radiology'
+  | 'Other';
+
+export type LabSampleType =
+  'Blood' | 'Serum' | 'Plasma' | 'Urine' | 'Sputum' | 'Stool' | 'Swab' | 'Tissue' | 'CSF' | 'Other';
+
+export type LabOrderPriority = 'ROUTINE' | 'URGENT' | 'STAT';
+
+export type LabOrderStatus =
+  'ORDERED' | 'SAMPLE_COLLECTED' | 'IN_PROGRESS' | 'COMPLETED' | 'CANCELLED';
+
+export interface ILabTestReferenceRange {
+  parameterName: string;
+  unit: string;
+  minNormal?: number;
+  maxNormal?: number;
+  textRange?: string; // e.g. "Negative", "< 5.7"
+  genderSpecific?: 'MALE' | 'FEMALE' | 'ALL';
+  ageMinYears?: number;
+  ageMaxYears?: number;
+}
+
+export interface ILabTest {
+  _id?: string;
+  hospitalId: string;
+  code: string;
+  name: string;
+  category: LabTestCategory;
+  sampleType: LabSampleType;
+  turnaroundTimeHours: number;
+  price: number;
+  referenceRanges: ILabTestReferenceRange[];
+  isActive: boolean;
+  createdAt?: string | Date;
+  updatedAt?: string | Date;
+}
+
+export interface ILabOrderItem {
+  testId: string;
+  testCode: string;
+  testName: string;
+  sampleType: LabSampleType;
+  status: LabOrderStatus;
+  collectedAt?: string | Date;
+  collectedBy?: string;
+}
+
+export interface ILabOrder {
+  _id?: string;
+  hospitalId: string;
+  patientId: string;
+  doctorId: string;
+  encounterId?: string;
+  orderNumber: string;
+  tests: ILabOrderItem[];
+  priority: LabOrderPriority;
+  clinicalNotes?: string;
+  status: LabOrderStatus;
+  orderedAt: string | Date;
+  sampleCollectedAt?: string | Date;
+  sampleCollectedBy?: string;
+  isDeleted: boolean;
+  createdAt?: string | Date;
+  updatedAt?: string | Date;
+}

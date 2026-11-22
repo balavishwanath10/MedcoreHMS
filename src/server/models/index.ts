@@ -14,3 +14,5 @@ export * from './ScheduledReminder.js';
 export * from './Medicine.js';
 export * from './Prescription.js';
 export * from './AuditLog.js';
+export * from './LabTest.js';
+export * from './LabOrder.js';

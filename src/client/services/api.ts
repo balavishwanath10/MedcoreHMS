@@ -487,3 +487,91 @@ export async function uploadDoctorSignature(
 export function getPrescriptionPdfUrl(id: string): string {
   return `/api/prescriptions/${id}/pdf`;
 }
+
+// Day 15 Laboratory Diagnostic APIs
+export async function fetchLabTests(query?: string, category?: string): Promise<any[]> {
+  const params = new URLSearchParams();
+  if (query) params.append('query', query);
+  if (category) params.append('category', category);
+
+  const q = params.toString() ? `?${params.toString()}` : '';
+  const response = await fetch(`/api/lab/tests${q}`, {
+    headers: { ...getAuthHeader(), 'Content-Type': 'application/json' },
+  });
+  const result: ApiResponse<any[]> = await response.json();
+  if (!result.success || !result.data) {
+    throw new Error(result.error?.message || 'Failed to fetch lab tests catalogue');
+  }
+  return result.data;
+}
+
+export async function createLabTest(data: any): Promise<any> {
+  const response = await fetch('/api/lab/tests', {
+    method: 'POST',
+    headers: { ...getAuthHeader(), 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  });
+  const result: ApiResponse<any> = await response.json();
+  if (!result.success || !result.data) {
+    throw new Error(result.error?.message || 'Failed to create lab test');
+  }
+  return result.data;
+}
+
+export async function createLabOrder(data: any): Promise<any> {
+  const response = await fetch('/api/lab/orders', {
+    method: 'POST',
+    headers: { ...getAuthHeader(), 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  });
+  const result: ApiResponse<any> = await response.json();
+  if (!result.success || !result.data) {
+    throw new Error(result.error?.message || 'Failed to place lab order');
+  }
+  return result.data;
+}
+
+export async function fetchLabOrders(params?: {
+  status?: string;
+  priority?: string;
+  patientId?: string;
+}): Promise<any[]> {
+  const urlParams = new URLSearchParams();
+  if (params?.status) urlParams.append('status', params.status);
+  if (params?.priority) urlParams.append('priority', params.priority);
+  if (params?.patientId) urlParams.append('patientId', params.patientId);
+
+  const q = urlParams.toString() ? `?${urlParams.toString()}` : '';
+  const response = await fetch(`/api/lab/orders${q}`, {
+    headers: { ...getAuthHeader(), 'Content-Type': 'application/json' },
+  });
+  const result: ApiResponse<any[]> = await response.json();
+  if (!result.success || !result.data) {
+    throw new Error(result.error?.message || 'Failed to fetch lab orders');
+  }
+  return result.data;
+}
+
+export async function fetchLabOrderById(id: string): Promise<any> {
+  const response = await fetch(`/api/lab/orders/${id}`, {
+    headers: { ...getAuthHeader(), 'Content-Type': 'application/json' },
+  });
+  const result: ApiResponse<any> = await response.json();
+  if (!result.success || !result.data) {
+    throw new Error(result.error?.message || 'Failed to fetch lab order details');
+  }
+  return result.data;
+}
+
+export async function markLabSampleCollected(id: string, notes?: string): Promise<any> {
+  const response = await fetch(`/api/lab/orders/${id}/sample-collected`, {
+    method: 'PATCH',
+    headers: { ...getAuthHeader(), 'Content-Type': 'application/json' },
+    body: JSON.stringify({ notes }),
+  });
+  const result: ApiResponse<any> = await response.json();
+  if (!result.success || !result.data) {
+    throw new Error(result.error?.message || 'Failed to update sample collection');
+  }
+  return result.data;
+}

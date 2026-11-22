@@ -11,6 +11,7 @@ import { encounterRouter } from './encounter.routes.js';
 import { clinicalHistoryRouter } from './clinicalHistory.routes.js';
 import { prescriptionRouter } from './prescription.routes.js';
 import { medicineRouter } from './medicine.routes.js';
+import { labRouter } from './lab.routes.js';
 
 export const apiRouter = Router();
 
@@ -60,6 +61,10 @@ apiRouter.use('/v1/prescriptions', prescriptionRouter);
 // Mount Medicine Formulary routes under /api/medicines and /api/v1/medicines
 apiRouter.use('/medicines', medicineRouter);
 apiRouter.use('/v1/medicines', medicineRouter);
+
+// Mount Laboratory Diagnostic routes under /api/lab and /api/v1/lab
+apiRouter.use('/lab', labRouter);
+apiRouter.use('/v1/lab', labRouter);
 
 // Base route for /api
 apiRouter.get('/', (_req, res) => {
