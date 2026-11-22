@@ -185,3 +185,106 @@ export async function updateAppointmentStatus(
   }
   return result.data;
 }
+
+// Day 11 EMR Encounter APIs
+export async function calculateVitals(vitals: any): Promise<any> {
+  const response = await fetch('/api/encounters/calculate-vitals', {
+    method: 'POST',
+    headers: { ...getAuthHeader(), 'Content-Type': 'application/json' },
+    body: JSON.stringify(vitals),
+  });
+  const result: ApiResponse<any> = await response.json();
+  if (!result.success || !result.data) {
+    throw new Error(result.error?.message || 'Failed to calculate vitals');
+  }
+  return result.data;
+}
+
+export async function fetchEncounters(params?: {
+  patientId?: string;
+  doctorId?: string;
+  appointmentId?: string;
+  status?: string;
+}): Promise<any[]> {
+  const query = new URLSearchParams();
+  if (params?.patientId) query.append('patientId', params.patientId);
+  if (params?.doctorId) query.append('doctorId', params.doctorId);
+  if (params?.appointmentId) query.append('appointmentId', params.appointmentId);
+  if (params?.status) query.append('status', params.status);
+
+  const url = `/api/encounters${query.toString() ? `?${query.toString()}` : ''}`;
+  const response = await fetch(url, {
+    headers: { ...getAuthHeader(), 'Content-Type': 'application/json' },
+  });
+  const result: ApiResponse<any[]> = await response.json();
+  if (!result.success || !result.data) {
+    throw new Error(result.error?.message || 'Failed to fetch encounters');
+  }
+  return result.data;
+}
+
+export async function fetchEncounterById(id: string): Promise<any> {
+  const response = await fetch(`/api/encounters/${id}`, {
+    headers: { ...getAuthHeader(), 'Content-Type': 'application/json' },
+  });
+  const result: ApiResponse<any> = await response.json();
+  if (!result.success || !result.data) {
+    throw new Error(result.error?.message || 'Failed to fetch encounter');
+  }
+  return result.data;
+}
+
+export async function createEncounter(data: any): Promise<any> {
+  const response = await fetch('/api/encounters', {
+    method: 'POST',
+    headers: { ...getAuthHeader(), 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  });
+  const result: ApiResponse<any> = await response.json();
+  if (!result.success || !result.data) {
+    throw new Error(result.error?.message || 'Failed to create encounter');
+  }
+  return result.data;
+}
+
+export async function updateEncounter(id: string, data: any): Promise<any> {
+  const response = await fetch(`/api/encounters/${id}`, {
+    method: 'PUT',
+    headers: { ...getAuthHeader(), 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  });
+  const result: ApiResponse<any> = await response.json();
+  if (!result.success || !result.data) {
+    throw new Error(result.error?.message || 'Failed to update encounter');
+  }
+  return result.data;
+}
+
+export async function signEncounter(id: string): Promise<any> {
+  const response = await fetch(`/api/encounters/${id}/sign`, {
+    method: 'POST',
+    headers: { ...getAuthHeader(), 'Content-Type': 'application/json' },
+    body: JSON.stringify({ confirmation: true }),
+  });
+  const result: ApiResponse<any> = await response.json();
+  if (!result.success || !result.data) {
+    throw new Error(result.error?.message || 'Failed to sign encounter');
+  }
+  return result.data;
+}
+
+export async function addEncounterAddendum(
+  id: string,
+  addendum: { amendmentReason: string; notes: string },
+): Promise<any> {
+  const response = await fetch(`/api/encounters/${id}/addendum`, {
+    method: 'POST',
+    headers: { ...getAuthHeader(), 'Content-Type': 'application/json' },
+    body: JSON.stringify(addendum),
+  });
+  const result: ApiResponse<any> = await response.json();
+  if (!result.success || !result.data) {
+    throw new Error(result.error?.message || 'Failed to add addendum');
+  }
+  return result.data;
+}

@@ -274,3 +274,88 @@ export const appointmentStatusUpdateSchema = z.object({
   reason: z.string().trim().max(500).optional(),
   cancellationReason: z.string().trim().max(500).optional(),
 });
+
+// Day 11 EMR Vitals & Encounter Schemas
+export const vitalsSchema = z.object({
+  systolicBp: z
+    .number()
+    .int()
+    .min(40, 'Systolic BP must be >= 40')
+    .max(300, 'Systolic BP must be <= 300'),
+  diastolicBp: z
+    .number()
+    .int()
+    .min(20, 'Diastolic BP must be >= 20')
+    .max(200, 'Diastolic BP must be <= 200'),
+  pulseRate: z
+    .number()
+    .int()
+    .min(30, 'Pulse rate must be >= 30')
+    .max(250, 'Pulse rate must be <= 250'),
+  temperatureF: z
+    .number()
+    .min(85, 'Temperature must be >= 85°F')
+    .max(115, 'Temperature must be <= 115°F'),
+  respiratoryRate: z
+    .number()
+    .int()
+    .min(5, 'Respiratory rate must be >= 5')
+    .max(80, 'Respiratory rate must be <= 80'),
+  oxygenSaturation: z.number().min(50, 'SpO2 must be >= 50%').max(100, 'SpO2 must be <= 100%'),
+  heightCm: z.number().min(30, 'Height must be >= 30 cm').max(300, 'Height must be <= 300 cm'),
+  weightKg: z.number().min(1, 'Weight must be >= 1 kg').max(500, 'Weight must be <= 500 kg'),
+  bmi: z.number().optional(),
+  bmiCategory: z.enum(['UNDERWEIGHT', 'NORMAL', 'OVERWEIGHT', 'OBESE']).optional(),
+  abnormalFlags: z.array(z.string()).optional(),
+});
+
+export const symptomSchema = z.object({
+  name: z.string().trim().min(1, 'Symptom name is required').max(200),
+  severity: z.enum(['MILD', 'MODERATE', 'SEVERE']),
+  onsetDate: z.coerce.date().optional(),
+  duration: z.string().trim().max(100).optional(),
+  notes: z.string().trim().max(1000).optional(),
+});
+
+export const encounterCreateSchema = z.object({
+  hospitalId: z.string().min(1, 'Hospital ID is required'),
+  patientId: z.string().min(1, 'Patient ID is required'),
+  doctorId: z.string().min(1, 'Doctor ID is required'),
+  appointmentId: z.string().optional(),
+  chiefComplaint: z
+    .string()
+    .trim()
+    .min(2, 'Chief complaint must be at least 2 characters')
+    .max(1000),
+  vitals: vitalsSchema.optional(),
+  symptoms: z.array(symptomSchema).optional(),
+  historyOfPresentIllness: z.string().trim().max(5000).optional(),
+  clinicalNotes: z.string().trim().max(5000).optional(),
+  assessment: z.string().trim().max(5000).optional(),
+});
+
+export const encounterUpdateSchema = z.object({
+  chiefComplaint: z.string().trim().min(2).max(1000).optional(),
+  vitals: vitalsSchema.optional(),
+  symptoms: z.array(symptomSchema).optional(),
+  historyOfPresentIllness: z.string().trim().max(5000).optional(),
+  clinicalNotes: z.string().trim().max(5000).optional(),
+  assessment: z.string().trim().max(5000).optional(),
+});
+
+export const encounterAddendumSchema = z.object({
+  amendmentReason: z
+    .string()
+    .trim()
+    .min(3, 'Reason for amendment is required (min 3 chars)')
+    .max(500),
+  notes: z.string().trim().min(3, 'Addendum notes are required (min 3 chars)').max(5000),
+});
+
+export const encounterSignSchema = z.object({
+  confirmation: z.literal(true, {
+    errorMap: () => ({
+      message: 'Explicit confirmation is required to finalize and sign encounter',
+    }),
+  }),
+});

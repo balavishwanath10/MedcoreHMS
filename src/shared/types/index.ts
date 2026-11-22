@@ -183,6 +183,133 @@ export interface ApiResponse<T = unknown> {
   timestamp: string;
 }
 
+// EMR Types (Day 11 & Day 12)
+export type EncounterStatus = 'OPEN' | 'SIGNED' | 'AMENDED';
+export type VitalsBmiCategory = 'UNDERWEIGHT' | 'NORMAL' | 'OVERWEIGHT' | 'OBESE';
+export type SymptomSeverity = 'MILD' | 'MODERATE' | 'SEVERE';
+
+export interface IVitals {
+  systolicBp: number;
+  diastolicBp: number;
+  pulseRate: number;
+  temperatureF: number;
+  respiratoryRate: number;
+  oxygenSaturation: number;
+  heightCm: number;
+  weightKg: number;
+  bmi?: number;
+  bmiCategory?: VitalsBmiCategory;
+  abnormalFlags?: string[];
+}
+
+export interface ISymptom {
+  name: string;
+  severity: SymptomSeverity;
+  onsetDate?: string | Date;
+  duration?: string;
+  notes?: string;
+}
+
+export interface IEncounterAddendum {
+  authorId: string;
+  authorRole: string;
+  authorName: string;
+  amendmentReason: string;
+  notes: string;
+  createdAt: string | Date;
+}
+
+export interface IEncounter {
+  _id?: string;
+  hospitalId: string;
+  patientId: string;
+  doctorId: string;
+  appointmentId?: string;
+  status: EncounterStatus;
+  chiefComplaint: string;
+  vitals?: IVitals;
+  symptoms?: ISymptom[];
+  historyOfPresentIllness?: string;
+  clinicalNotes?: string;
+  assessment?: string;
+  signedAt?: string | Date | null;
+  signedBy?: string | null;
+  addenda?: IEncounterAddendum[];
+  isDeleted: boolean;
+  createdAt?: string | Date;
+  updatedAt?: string | Date;
+}
+
+// Day 12 Clinical History Types
+export type DiagnosisType = 'DIFFERENTIAL' | 'CONFIRMED';
+export type AllergySeverity = 'MILD' | 'MODERATE' | 'SEVERE' | 'LIFE_THREATENING';
+
+export interface IDiagnosis {
+  code: string; // ICD-10
+  description: string;
+  type: DiagnosisType;
+  diagnosedAt: string | Date;
+  diagnosedBy: string;
+  notes?: string;
+}
+
+export interface ITreatmentPlan {
+  instructions: string;
+  prescriptions?: Array<{
+    medicationName: string;
+    dosage: string;
+    frequency: string;
+    duration: string;
+    instructions?: string;
+  }>;
+  followUpDate?: string | Date;
+  lifestyleRecommendations?: string[];
+}
+
+export interface IAllergy {
+  _id?: string;
+  hospitalId: string;
+  patientId: string;
+  allergen: string;
+  reaction: string;
+  severity: AllergySeverity;
+  isAdverseDrugReaction: boolean;
+  diagnosedDate?: string | Date;
+  isDeleted: boolean;
+  createdAt?: string | Date;
+  updatedAt?: string | Date;
+}
+
+export interface IVaccination {
+  _id?: string;
+  hospitalId: string;
+  patientId: string;
+  vaccineName: string;
+  batchNumber?: string;
+  administeredDate: string | Date;
+  administeredBy?: string;
+  nextDueDate?: string | Date;
+  isDeleted: boolean;
+  createdAt?: string | Date;
+  updatedAt?: string | Date;
+}
+
+export interface IFamilyHistory {
+  _id?: string;
+  hospitalId: string;
+  patientId: string;
+  relationship: string;
+  condition: string;
+  hasDiabetes?: boolean;
+  hasHypertension?: boolean;
+  hasCancer?: boolean;
+  hasCardiacDisease?: boolean;
+  notes?: string;
+  isDeleted: boolean;
+  createdAt?: string | Date;
+  updatedAt?: string | Date;
+}
+
 export interface HealthCheckData {
   status: 'healthy' | 'degraded' | 'unhealthy';
   uptimeSeconds: number;
