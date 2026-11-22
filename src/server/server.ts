@@ -15,6 +15,16 @@ async function startServer() {
     // Attempt database connection (does not crash if offline; logs status)
     await connectDatabase();
 
+    // Recover pending scheduled appointment reminders following server start / restart
+    try {
+      const { reminderScheduler } = await import('./services/reminderScheduler.service.js');
+      await reminderScheduler.recoverPendingReminders();
+    } catch (recoveryErr: any) {
+      logger.warn('Initial reminder recovery attempt skipped or deferred', {
+        error: recoveryErr.message,
+      });
+    }
+
     server = app.listen(env.PORT, () => {
       logger.info(`MedCoreHMS server listening on port ${env.PORT}`, {
         healthEndpoint: `http://localhost:${env.PORT}/api/health`,

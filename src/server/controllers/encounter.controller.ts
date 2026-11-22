@@ -407,6 +407,7 @@ export class EncounterController {
       // Capture historical snapshot before updating, ensuring no clinical entries are silently overwritten
       const changedFields: string[] = [];
       const previousSnapshot: Record<string, any> = {};
+      const revisedSnapshot: Record<string, any> = {};
 
       if (
         validated.chiefComplaint !== undefined &&
@@ -414,6 +415,7 @@ export class EncounterController {
       ) {
         changedFields.push('chiefComplaint');
         previousSnapshot.chiefComplaint = encounter.chiefComplaint;
+        revisedSnapshot.chiefComplaint = validated.chiefComplaint;
         encounter.chiefComplaint = validated.chiefComplaint;
       }
       if (validated.vitals !== undefined) {
@@ -421,13 +423,16 @@ export class EncounterController {
         previousSnapshot.vitals = encounter.vitals
           ? JSON.parse(JSON.stringify(encounter.vitals))
           : undefined;
-        encounter.vitals = enrichVitals(validated.vitals);
+        const newVitals = enrichVitals(validated.vitals);
+        revisedSnapshot.vitals = newVitals;
+        encounter.vitals = newVitals;
       }
       if (validated.symptoms !== undefined) {
         changedFields.push('symptoms');
         previousSnapshot.symptoms = encounter.symptoms
           ? JSON.parse(JSON.stringify(encounter.symptoms))
           : [];
+        revisedSnapshot.symptoms = validated.symptoms;
         encounter.symptoms = validated.symptoms as any;
       }
       if (
@@ -436,6 +441,7 @@ export class EncounterController {
       ) {
         changedFields.push('historyOfPresentIllness');
         previousSnapshot.historyOfPresentIllness = encounter.historyOfPresentIllness;
+        revisedSnapshot.historyOfPresentIllness = validated.historyOfPresentIllness;
         encounter.historyOfPresentIllness = validated.historyOfPresentIllness;
       }
       if (
@@ -444,11 +450,13 @@ export class EncounterController {
       ) {
         changedFields.push('clinicalNotes');
         previousSnapshot.clinicalNotes = encounter.clinicalNotes;
+        revisedSnapshot.clinicalNotes = validated.clinicalNotes;
         encounter.clinicalNotes = validated.clinicalNotes;
       }
       if (validated.assessment !== undefined && validated.assessment !== encounter.assessment) {
         changedFields.push('assessment');
         previousSnapshot.assessment = encounter.assessment;
+        revisedSnapshot.assessment = validated.assessment;
         encounter.assessment = validated.assessment;
       }
       if (validated.diagnoses !== undefined) {
@@ -456,6 +464,7 @@ export class EncounterController {
         previousSnapshot.diagnoses = encounter.diagnoses
           ? JSON.parse(JSON.stringify(encounter.diagnoses))
           : [];
+        revisedSnapshot.diagnoses = validated.diagnoses;
         encounter.diagnoses = validated.diagnoses as any;
       }
       if (validated.treatmentPlan !== undefined) {
@@ -463,6 +472,7 @@ export class EncounterController {
         previousSnapshot.treatmentPlan = encounter.treatmentPlan
           ? JSON.parse(JSON.stringify(encounter.treatmentPlan))
           : undefined;
+        revisedSnapshot.treatmentPlan = validated.treatmentPlan;
         encounter.treatmentPlan = validated.treatmentPlan as any;
       }
 
@@ -478,6 +488,7 @@ export class EncounterController {
           authorName: req.user?.email || 'Clinical Staff',
           reasonForChange: validated.reasonForChange || 'Clinical documentation update',
           previousSnapshot,
+          revisedSnapshot,
           changedFields,
           createdAt: new Date(),
         };

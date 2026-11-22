@@ -10,3 +10,4 @@ export * from './Encounter.js';
 export * from './Allergy.js';
 export * from './Vaccination.js';
 export * from './FamilyHistory.js';
+export * from './ScheduledReminder.js';

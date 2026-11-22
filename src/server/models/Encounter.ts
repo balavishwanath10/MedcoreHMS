@@ -102,6 +102,7 @@ const ClinicalRevisionSchema = new Schema<IClinicalRevision>(
     authorName: { type: String, default: 'Clinical User' },
     reasonForChange: { type: String, required: true, trim: true },
     previousSnapshot: { type: Schema.Types.Mixed, required: true },
+    revisedSnapshot: { type: Schema.Types.Mixed },
     changedFields: [{ type: String, required: true }],
     createdAt: { type: Date, default: Date.now },
   },

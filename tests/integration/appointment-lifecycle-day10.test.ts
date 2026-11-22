@@ -8,6 +8,7 @@ import { DoctorProfile } from '../../src/server/models/DoctorProfile.js';
 import { PatientProfile } from '../../src/server/models/PatientProfile.js';
 import { notificationService } from '../../src/server/services/notification.service.js';
 import { reminderScheduler } from '../../src/server/services/reminderScheduler.service.js';
+import { ScheduledReminder } from '../../src/server/models/ScheduledReminder.js';
 import { UserRole } from '../../src/shared/types/index.js';
 
 describe('Day 10: Appointment Lifecycle, Transitions & Emergency Bookings Integration Tests', () => {
@@ -423,10 +424,10 @@ describe('Day 10: Appointment Lifecycle, Transitions & Emergency Bookings Integr
   // 6. Reminder Service & Scheduler Evaluation
   // =========================================================================
   describe('Appointment Reminder Service & Scheduler', () => {
-    it('should schedule both 24-hour and 1-hour reminders for future appointments without immediate invocation', () => {
+    it('should schedule both 24-hour and 1-hour reminders for future appointments without immediate invocation', async () => {
       const futureAppt = new Date(Date.now() + 48 * 60 * 60 * 1000); // 48h in future
 
-      const scheduleResult = reminderScheduler.scheduleAppointmentReminders({
+      const scheduleResult = await reminderScheduler.scheduleAppointmentReminders({
         appointmentId,
         appointmentTime: futureAppt,
         recipientEmail: 'patient@example.com',
@@ -449,18 +450,18 @@ describe('Day 10: Appointment Lifecycle, Transitions & Emergency Bookings Integr
       expect(job1h!.timer).toBeDefined();
     });
 
-    it('should prevent duplicate reminder scheduling for the same appointment and window', () => {
+    it('should prevent duplicate reminder scheduling for the same appointment and window', async () => {
       const futureAppt = new Date(Date.now() + 48 * 60 * 60 * 1000);
 
       // First scheduling
-      reminderScheduler.scheduleAppointmentReminders({
+      await reminderScheduler.scheduleAppointmentReminders({
         appointmentId,
         appointmentTime: futureAppt,
         recipientEmail: 'patient@example.com',
       });
 
       // Second identical scheduling attempt
-      reminderScheduler.scheduleAppointmentReminders({
+      await reminderScheduler.scheduleAppointmentReminders({
         appointmentId,
         appointmentTime: futureAppt,
         recipientEmail: 'patient@example.com',
@@ -471,16 +472,16 @@ describe('Day 10: Appointment Lifecycle, Transitions & Emergency Bookings Integr
       expect(jobs).toHaveLength(2);
     });
 
-    it('should cancel pending reminders and clear timers when appointment is cancelled', () => {
+    it('should cancel pending reminders and clear timers when appointment is cancelled', async () => {
       const futureAppt = new Date(Date.now() + 48 * 60 * 60 * 1000);
 
-      reminderScheduler.scheduleAppointmentReminders({
+      await reminderScheduler.scheduleAppointmentReminders({
         appointmentId,
         appointmentTime: futureAppt,
         recipientEmail: 'patient@example.com',
       });
 
-      const cancelResult = reminderScheduler.cancelAppointmentReminders(
+      const cancelResult = await reminderScheduler.cancelAppointmentReminders(
         appointmentId,
         'Patient requested cancellation',
       );
@@ -491,17 +492,17 @@ describe('Day 10: Appointment Lifecycle, Transitions & Emergency Bookings Integr
       expect(jobs.every((j) => j.timer === null)).toBe(true);
     });
 
-    it('should reschedule reminders when appointment time is updated', () => {
+    it('should reschedule reminders when appointment time is updated', async () => {
       const originalTime = new Date(Date.now() + 48 * 60 * 60 * 1000);
       const newTime = new Date(Date.now() + 72 * 60 * 60 * 1000);
 
-      reminderScheduler.scheduleAppointmentReminders({
+      await reminderScheduler.scheduleAppointmentReminders({
         appointmentId,
         appointmentTime: originalTime,
         recipientEmail: 'patient@example.com',
       });
 
-      reminderScheduler.rescheduleAppointmentReminders({
+      await reminderScheduler.rescheduleAppointmentReminders({
         appointmentId,
         newAppointmentTime: newTime,
         recipientEmail: 'patient@example.com',
@@ -536,8 +537,86 @@ describe('Day 10: Appointment Lifecycle, Transitions & Emergency Bookings Integr
     it('should accurately report BullMQ/Redis infrastructure readiness', () => {
       const report = reminderScheduler.getInfrastructureReport();
       expect(report.hasBullMQ).toBe(false);
-      expect(report.engine).toBe('IN_PROCESS_MANAGED_SCHEDULER');
-      expect(report.message).toContain('BullMQ');
+      expect(report.engine).toBe('MONGO_PERSISTED_DURABLE_SCHEDULER');
+      expect(report.message).toContain('ScheduledReminder');
+    });
+
+    it('DURABLE RECOVERY: should recover pending reminders and re-arm timers following server restart', async () => {
+      const futureTime = new Date(Date.now() + 2 * 60 * 60 * 1000); // 2 hours ahead
+      const overdueTime = new Date(Date.now() - 5 * 60 * 1000); // 5 minutes ago
+
+      // Mock ScheduledReminder.find to simulate database persisted state after restart
+      const mockPendingDocs = [
+        {
+          _id: new mongoose.Types.ObjectId(),
+          appointmentId: new mongoose.Types.ObjectId(appointmentId),
+          hospitalId: new mongoose.Types.ObjectId(hospitalAId),
+          reminderType: '1_HOUR',
+          recipientEmail: 'recovery-patient@test.com',
+          recipientPhone: '+15559876543',
+          appointmentTime: new Date(Date.now() + 3 * 3600000),
+          scheduledFor: futureTime,
+          status: 'PENDING',
+        },
+        {
+          _id: new mongoose.Types.ObjectId(),
+          appointmentId: new mongoose.Types.ObjectId(appointmentId),
+          hospitalId: new mongoose.Types.ObjectId(hospitalAId),
+          reminderType: '24_HOUR',
+          recipientEmail: 'overdue-patient@test.com',
+          appointmentTime: new Date(Date.now() + 10 * 3600000),
+          scheduledFor: overdueTime,
+          status: 'PENDING',
+        },
+      ];
+
+      vi.spyOn(mongoose.connection, 'readyState', 'get').mockReturnValue(1);
+      vi.spyOn(ScheduledReminder, 'find').mockResolvedValue(mockPendingDocs as any);
+      vi.spyOn(ScheduledReminder, 'findByIdAndUpdate').mockResolvedValue({} as any);
+
+      // Simulate clean restart by clearing in-memory state
+      reminderScheduler.clearAll();
+      expect(reminderScheduler.getJobs()).toHaveLength(0);
+
+      // Execute recovery
+      const recoveryResult = await reminderScheduler.recoverPendingReminders();
+
+      expect(recoveryResult.recoveredCount).toBe(2);
+      expect(recoveryResult.rearmedFuture).toBe(1);
+      expect(recoveryResult.dispatchedImmediate).toBe(1);
+
+      // Verify future job is restored in memory with active timer
+      const recoveredJobs = reminderScheduler.getJobs();
+      expect(recoveredJobs.length).toBeGreaterThanOrEqual(1);
+      expect(recoveredJobs.some((j) => j.status === 'SCHEDULED' && j.timer !== null)).toBe(true);
+    });
+
+    it('PROVIDER CREDENTIALS ABSENT: should report delivery as unavailable without claiming success', async () => {
+      // Save existing env
+      const origSmtp = process.env.SMTP_USER;
+      const origTwilio = process.env.TWILIO_ACCOUNT_SID;
+
+      delete process.env.SMTP_USER;
+      delete process.env.TWILIO_ACCOUNT_SID;
+
+      try {
+        const emailResult = await notificationService.sendEmail({
+          to: 'test@unconfigured.org',
+          subject: 'Unconfigured Test',
+        });
+        expect(emailResult.sent).toBe(false);
+        expect(emailResult.provider).toBe('SMTP_UNAVAILABLE');
+
+        const smsResult = await notificationService.sendSms({
+          to: '+15550001111',
+          message: 'Unconfigured SMS test',
+        });
+        expect(smsResult.sent).toBe(false);
+        expect(smsResult.provider).toBe('TWILIO_UNAVAILABLE');
+      } finally {
+        if (origSmtp) process.env.SMTP_USER = origSmtp;
+        if (origTwilio) process.env.TWILIO_ACCOUNT_SID = origTwilio;
+      }
     });
   });
 });

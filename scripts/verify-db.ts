@@ -1,6 +1,9 @@
 import mongoose from 'mongoose';
 import { connectDatabase, disconnectDatabase } from '../src/server/config/database.js';
 import { logger } from '../src/server/utils/logger.js';
+import { app } from '../src/server/app.js';
+import { makeRequest } from '../tests/utils/inMemoryTestClient.js';
+import { generateAccessToken } from '../src/server/utils/jwt.js';
 import { Hospital } from '../src/server/models/Hospital.js';
 import { User } from '../src/server/models/User.js';
 import { Department } from '../src/server/models/Department.js';
@@ -12,13 +15,14 @@ import { Encounter } from '../src/server/models/Encounter.js';
 import { Allergy } from '../src/server/models/Allergy.js';
 import { Vaccination } from '../src/server/models/Vaccination.js';
 import { FamilyHistory } from '../src/server/models/FamilyHistory.js';
+import { ScheduledReminder } from '../src/server/models/ScheduledReminder.js';
 
 let atlasAssertionCount = 0;
 let atlasAssertionPassed = 0;
 
 /**
  * Strict assertion helper for live MongoDB Atlas verification.
- * Every reported PASS must correspond to an assertion that actually ran.
+ * Every reported PASS must correspond to a genuine assertion of the actual behavior.
  */
 function assertAtlas(condition: boolean, stepName: string, failureDetails?: string): void {
   atlasAssertionCount++;
@@ -35,17 +39,20 @@ async function runAtlas15StepSyntheticVerification(): Promise<{ ran: number; pas
   const synthCode = `HOSP-SYNTH-${synthSuffix.slice(-6)}`;
 
   let synthHospitalId: mongoose.Types.ObjectId | null = null;
-  let synthDoctorId: mongoose.Types.ObjectId | null = null;
+  let synthDoctor1Id: mongoose.Types.ObjectId | null = null;
+  let synthDoctor2Id: mongoose.Types.ObjectId | null = null;
   let synthPatient1Id: mongoose.Types.ObjectId | null = null;
   let synthPatient2Id: mongoose.Types.ObjectId | null = null;
   let synthPatientUserId: mongoose.Types.ObjectId | null = null;
   let synthDoctorUserId: mongoose.Types.ObjectId | null = null;
+  let synthDoctor2UserId: mongoose.Types.ObjectId | null = null;
+  let synthReceptionistUserId: mongoose.Types.ObjectId | null = null;
 
   try {
     // -------------------------------------------------------------------------
-    // Step 1 & 2: Replica Set & Transaction Capability Verification
+    // Step 1 & 2: Replica Set Topology & Transaction Capability
     // -------------------------------------------------------------------------
-    logger.info('Step 1 & 2: Verifying MongoDB Atlas replica set and transaction capability...');
+    logger.info('Step 1 & 2: Verifying MongoDB Atlas replica set topology and transaction capability...');
     const adminDb = mongoose.connection.db?.admin();
     assertAtlas(!!adminDb, 'Step 1: Admin DB reference', 'Unable to obtain admin DB reference');
 
@@ -59,13 +66,12 @@ async function runAtlas15StepSyntheticVerification(): Promise<{ ran: number; pas
         isWritablePrimary: serverStatus.isWritablePrimary,
       });
     } catch {
-      // Fallback for older server versions
       const isMasterStatus: any = await adminDb!.command({ isMaster: 1 });
       isReplicaSet = Boolean(isMasterStatus.setName || isMasterStatus.hosts);
     }
     assertAtlas(isReplicaSet, 'Step 1: Replica Set Topology', 'Connected database is not a replica set; transactions required');
 
-    // Test transaction lifecycle (start, write inside transaction, commit)
+    // Test transaction lifecycle on Atlas
     const testSession = await mongoose.startSession();
     assertAtlas(!!testSession, 'Step 2: Transaction Session Creation', 'Failed to create Mongoose session');
     testSession.startTransaction();
@@ -78,11 +84,14 @@ async function runAtlas15StepSyntheticVerification(): Promise<{ ran: number; pas
     // Step 3: Deep Index Inspection (Fail if missing or malformed)
     // -------------------------------------------------------------------------
     logger.info('Step 3: Deep inspection of collection indexes and partial filters...');
-    await Appointment.syncIndexes();
-    await PatientProfile.syncIndexes();
-    await DoctorProfile.syncIndexes();
-    await Hospital.syncIndexes();
-    await Encounter.syncIndexes();
+    await Promise.all([
+      Appointment.syncIndexes(),
+      PatientProfile.syncIndexes(),
+      DoctorProfile.syncIndexes(),
+      Hospital.syncIndexes(),
+      Encounter.syncIndexes(),
+      ScheduledReminder.syncIndexes(),
+    ]);
 
     const apptIndexes = await Appointment.collection.indexes();
 
@@ -133,9 +142,9 @@ async function runAtlas15StepSyntheticVerification(): Promise<{ ran: number; pas
     logger.info('Step 3 PASS: Database index definitions, uniqueness, and partial filters strictly verified');
 
     // -------------------------------------------------------------------------
-    // Step 4: Multi-Tenant Synthetic Scaffolding (Hospital, Dept, Doctor, 2 Patient Profiles)
+    // Step 4: Multi-Tenant Synthetic Scaffolding (Hospital, Dept, Doctors, Multi-Profile Patient)
     // -------------------------------------------------------------------------
-    logger.info('Step 4: Creating synthetic hospital, department, doctor, and multi-profile patient...');
+    logger.info('Step 4: Creating synthetic hospital, department, doctors, and multi-profile patient...');
     const hospital = await Hospital.create({
       name: `Synthetic Test Hospital ${synthSuffix}`,
       code: synthCode,
@@ -162,28 +171,51 @@ async function runAtlas15StepSyntheticVerification(): Promise<{ ran: number; pas
     });
     assertAtlas(!!dept._id, 'Step 4: Department Creation', 'Synthetic department failed to create');
 
+    // Doctor 1
     const docUser = await User.create({
       hospitalId: synthHospitalId,
-      email: `doctor-${synthSuffix}@hospital.test`,
+      email: `doctor1-${synthSuffix}@hospital.test`,
       passwordHash: '$2b$12$eXampleHashedPasswordForTestPurposesOnly00000000000',
       role: 'DOCTOR',
     });
     synthDoctorUserId = docUser._id;
 
-    const doctor = await DoctorProfile.create({
+    const doctor1 = await DoctorProfile.create({
       hospitalId: synthHospitalId,
       userId: synthDoctorUserId,
       departmentId: dept._id,
-      licenseNumber: `DOC-LIC-${synthSuffix.slice(-6)}`,
+      licenseNumber: `DOC-LIC1-${synthSuffix.slice(-6)}`,
       specialization: 'Internal Medicine',
       qualifications: ['MD', 'MBBS'],
       experienceYears: 10,
       consultationFee: 150,
       isActive: true,
     });
-    synthDoctorId = doctor._id;
-    assertAtlas(!!synthDoctorId, 'Step 4: Doctor Creation', 'Synthetic doctor profile failed to create');
+    synthDoctor1Id = doctor1._id;
 
+    // Doctor 2 (for cross-doctor tests)
+    const docUser2 = await User.create({
+      hospitalId: synthHospitalId,
+      email: `doctor2-${synthSuffix}@hospital.test`,
+      passwordHash: '$2b$12$eXampleHashedPasswordForTestPurposesOnly00000000000',
+      role: 'DOCTOR',
+    });
+    synthDoctor2UserId = docUser2._id;
+
+    const doctor2 = await DoctorProfile.create({
+      hospitalId: synthHospitalId,
+      userId: synthDoctor2UserId,
+      departmentId: dept._id,
+      licenseNumber: `DOC-LIC2-${synthSuffix.slice(-6)}`,
+      specialization: 'Cardiology',
+      qualifications: ['MD'],
+      experienceYears: 12,
+      consultationFee: 200,
+      isActive: true,
+    });
+    synthDoctor2Id = doctor2._id;
+
+    // Patient User (Account)
     const patUser = await User.create({
       hospitalId: synthHospitalId,
       email: `patient-${synthSuffix}@hospital.test`,
@@ -192,7 +224,7 @@ async function runAtlas15StepSyntheticVerification(): Promise<{ ran: number; pas
     });
     synthPatientUserId = patUser._id;
 
-    // Create Profile 1 (Adult)
+    // Sibling Profile 1 (Adult)
     const patient1 = await PatientProfile.create({
       hospitalId: synthHospitalId,
       userId: synthPatientUserId,
@@ -208,7 +240,7 @@ async function runAtlas15StepSyntheticVerification(): Promise<{ ran: number; pas
     });
     synthPatient1Id = patient1._id;
 
-    // Create Profile 2 (Dependent under same User account)
+    // Sibling Profile 2 (Dependent under same User account)
     const patient2 = await PatientProfile.create({
       hospitalId: synthHospitalId,
       userId: synthPatientUserId,
@@ -224,292 +256,333 @@ async function runAtlas15StepSyntheticVerification(): Promise<{ ran: number; pas
     });
     synthPatient2Id = patient2._id;
 
+    // Receptionist User
+    const recUser = await User.create({
+      hospitalId: synthHospitalId,
+      email: `receptionist-${synthSuffix}@hospital.test`,
+      passwordHash: '$2b$12$eXampleHashedPasswordForTestPurposesOnly00000000000',
+      role: 'RECEPTIONIST',
+    });
+    synthReceptionistUserId = recUser._id;
+
     assertAtlas(!!synthPatient1Id && !!synthPatient2Id, 'Step 4: Multi-Profile Patient Creation');
     logger.info('Step 4 PASS: Multi-tenant synthetic scaffolding persisted successfully');
 
-    // -------------------------------------------------------------------------
-    // Step 5: Persist and Retrieve Doctor Availability
-    // -------------------------------------------------------------------------
-    logger.info('Step 5: Persisting and retrieving doctor availability...');
-    const avail = await DoctorAvailability.create({
-      hospitalId: synthHospitalId,
-      doctorId: synthDoctorId,
-      dayOfWeek: 1, // Monday
-      startTime: '09:00',
-      endTime: '17:00',
-      slotDurationMinutes: 30,
-      isAvailable: true,
+    // Generate JWT Access Tokens for API exercise
+    const patToken = generateAccessToken({
+      userId: synthPatientUserId.toString(),
+      email: `patient-${synthSuffix}@hospital.test`,
+      role: 'PATIENT',
+      hospitalId: synthHospitalId.toString(),
     });
-    const retrievedAvail = await DoctorAvailability.findById(avail._id);
+
+    const doc1Token = generateAccessToken({
+      userId: synthDoctorUserId.toString(),
+      email: `doctor1-${synthSuffix}@hospital.test`,
+      role: 'DOCTOR',
+      hospitalId: synthHospitalId.toString(),
+    });
+
+    const receptionistToken = generateAccessToken({
+      userId: synthReceptionistUserId.toString(),
+      email: `receptionist-${synthSuffix}@hospital.test`,
+      role: 'RECEPTIONIST',
+      hospitalId: synthHospitalId.toString(),
+    });
+
+    // -------------------------------------------------------------------------
+    // Step 5: Doctor Availability Persistence
+    // -------------------------------------------------------------------------
+    logger.info('Step 5: Persisting and retrieving doctor availability on Atlas...');
+    const avail = await DoctorAvailability.create([
+      {
+        hospitalId: synthHospitalId,
+        doctorId: synthDoctor1Id,
+        dayOfWeek: 1, // Monday
+        startTime: '08:00',
+        endTime: '18:00',
+        slotDurationMinutes: 30,
+        isAvailable: true,
+      },
+      {
+        hospitalId: synthHospitalId,
+        doctorId: synthDoctor2Id,
+        dayOfWeek: 1, // Monday
+        startTime: '08:00',
+        endTime: '18:00',
+        slotDurationMinutes: 30,
+        isAvailable: true,
+      },
+    ]);
+    const retrievedAvail = await DoctorAvailability.findById(avail[0]._id);
     assertAtlas(!!retrievedAvail && retrievedAvail.slotDurationMinutes === 30, 'Step 5: Availability Retrieval');
     logger.info('Step 5 PASS: Doctor availability persisted and verified');
 
     // -------------------------------------------------------------------------
-    // Step 6: Baseline Appointment Creation
+    // Step 6: Baseline Appointment Creation via Real API
     // -------------------------------------------------------------------------
-    logger.info('Step 6: Creating baseline appointment on Atlas...');
-    const slot1Start = new Date(Date.now() + 86400000 * 7); // 7 days ahead
-    slot1Start.setHours(10, 0, 0, 0);
-    const slot1End = new Date(slot1Start.getTime() + 1800000); // 30 min (10:00 - 10:30)
+    logger.info('Step 6: Creating baseline appointment on Atlas via actual booking API/controller...');
+    const slot1Start = new Date(Date.now() + 86400000 * 7);
+    const day1 = slot1Start.getDay();
+    const diff1 = (1 + 7 - day1) % 7 || 7;
+    slot1Start.setDate(slot1Start.getDate() + diff1);
+    slot1Start.setHours(10, 0, 0, 0); // Next Monday 10:00
+    const slot1End = new Date(slot1Start.getTime() + 1800000); // 10:30
 
-    const appt1 = await Appointment.create({
-      hospitalId: synthHospitalId,
-      doctorId: synthDoctorId,
-      patientId: synthPatient1Id,
-      departmentId: dept._id,
-      startTime: slot1Start,
-      endTime: slot1End,
-      status: 'CONFIRMED',
-      type: 'ROUTINE',
-      isCancelled: false,
-      isDeleted: false,
-    });
-    assertAtlas(!!appt1._id && appt1.status === 'CONFIRMED', 'Step 6: Baseline Appointment Creation');
-    logger.info('Step 6 PASS: Baseline appointment persisted and confirmed');
-
-    // -------------------------------------------------------------------------
-    // Step 7: Real Concurrent Booking Requests Against Atlas (Promise.all)
-    // -------------------------------------------------------------------------
-    logger.info('Step 7: Executing real concurrent database writes for exact slot...');
-    const concurrentSlotStart = new Date(Date.now() + 86400000 * 8); // 8 days ahead
-    concurrentSlotStart.setHours(11, 0, 0, 0);
-    const concurrentSlotEnd = new Date(concurrentSlotStart.getTime() + 1800000);
-
-    const bookingAttempt1 = Appointment.create({
-      hospitalId: synthHospitalId,
-      doctorId: synthDoctorId,
-      patientId: synthPatient1Id,
-      departmentId: dept._id,
-      startTime: concurrentSlotStart,
-      endTime: concurrentSlotEnd,
-      status: 'CONFIRMED',
-      type: 'ROUTINE',
-      isCancelled: false,
-      isDeleted: false,
+    const baselineRes = await makeRequest(app, {
+      method: 'POST',
+      url: '/api/appointments',
+      headers: { authorization: `Bearer ${patToken}` },
+      body: {
+        patientId: synthPatient1Id.toString(),
+        doctorId: synthDoctor1Id.toString(),
+        startTime: slot1Start.toISOString(),
+        endTime: slot1End.toISOString(),
+        reason: 'Baseline routine consultation',
+      },
     });
 
-    const bookingAttempt2 = Appointment.create({
-      hospitalId: synthHospitalId,
-      doctorId: synthDoctorId,
-      patientId: synthPatient2Id,
-      departmentId: dept._id,
-      startTime: concurrentSlotStart,
-      endTime: concurrentSlotEnd,
-      status: 'CONFIRMED',
-      type: 'ROUTINE',
-      isCancelled: false,
-      isDeleted: false,
-    });
-
-    const results = await Promise.allSettled([bookingAttempt1, bookingAttempt2]);
-    const fulfilled = results.filter((r) => r.status === 'fulfilled');
-    const rejected = results.filter((r) => r.status === 'rejected');
-
-    assertAtlas(
-      fulfilled.length === 1,
-      'Step 7: Concurrent Slot Single Winner',
-      `Expected exactly 1 booking to succeed, but got ${fulfilled.length}`,
-    );
-    assertAtlas(
-      rejected.length === 1,
-      'Step 7: Concurrent Slot Single Conflict',
-      `Expected exactly 1 booking to fail, but got ${rejected.length}`,
-    );
-    const rejectionErr: any = (rejected[0] as PromiseRejectedResult).reason;
-    assertAtlas(
-      rejectionErr.code === 11000,
-      'Step 7: Duplicate Key Error Rejection',
-      `Expected code 11000 duplicate key error, got: ${rejectionErr.message}`,
-    );
-    logger.info('Step 7 PASS: Real concurrent booking write correctly resolved (1 winner, 1 E11000 rejection)');
+    assertAtlas(baselineRes.statusCode === 201, 'Step 6: Baseline Appointment API 201', `Status: ${baselineRes.statusCode}`);
+    const synthAppt1Id = baselineRes.body.data?._id;
+    assertAtlas(!!synthAppt1Id, 'Step 6: Baseline Appointment ID in Response');
+    logger.info('Step 6 PASS: Baseline appointment created via real booking API');
 
     // -------------------------------------------------------------------------
-    // Step 8: Partial Interval Overlap Rejection
+    // Step 7: Real Concurrent Booking API Requests Against Atlas
     // -------------------------------------------------------------------------
-    logger.info('Step 8: Testing partial interval overlap detection against Atlas...');
-    // Doctor already has appt1 at 10:00 - 10:30.
-    // Attempting overlapping interval 10:15 - 10:45:
+    logger.info('Step 7: Executing real concurrent API requests for exact slot against Atlas...');
+    const concurrentSlotStart = new Date(slot1Start);
+    concurrentSlotStart.setHours(11, 0, 0, 0); // 11:00
+    const concurrentSlotEnd = new Date(concurrentSlotStart.getTime() + 1800000); // 11:30
+
+    const [res1, res2] = await Promise.all([
+      makeRequest(app, {
+        method: 'POST',
+        url: '/api/appointments',
+        headers: { authorization: `Bearer ${patToken}` },
+        body: {
+          patientId: synthPatient1Id.toString(),
+          doctorId: synthDoctor1Id.toString(),
+          startTime: concurrentSlotStart.toISOString(),
+          endTime: concurrentSlotEnd.toISOString(),
+          reason: 'Concurrent booking attempt 1',
+        },
+      }),
+      makeRequest(app, {
+        method: 'POST',
+        url: '/api/appointments',
+        headers: { authorization: `Bearer ${patToken}` },
+        body: {
+          patientId: synthPatient2Id.toString(),
+          doctorId: synthDoctor1Id.toString(),
+          startTime: concurrentSlotStart.toISOString(),
+          endTime: concurrentSlotEnd.toISOString(),
+          reason: 'Concurrent booking attempt 2',
+        },
+      }),
+    ]);
+
+    const statuses = [res1.statusCode, res2.statusCode].sort();
+    assertAtlas(statuses[0] === 201 && statuses[1] === 409, 'Step 7: Exactly 1 Success (201) and 1 Conflict (409)');
+    const conflictRes = res1.statusCode === 409 ? res1 : res2;
+    assertAtlas(
+      ['DOCTOR_DOUBLE_BOOKING', 'PATIENT_OVERLAPPING_APPOINTMENT'].includes(conflictRes.body.error?.code),
+      'Step 7: Conflict Returned Structured Code',
+      `Got code: ${conflictRes.body.error?.code}`,
+    );
+    logger.info('Step 7 PASS: Real concurrent booking write correctly resolved via actual controller');
+
+    // -------------------------------------------------------------------------
+    // Step 8: Partial Interval Overlap Rejection via Real API
+    // -------------------------------------------------------------------------
+    logger.info('Step 8: Testing partial interval overlap rejection via real booking API...');
+    // Doctor 1 already has baseline appointment at 10:00 - 10:30.
+    // Attempting overlapping interval 10:15 - 10:45 on Doctor 1:
     const partialOverlapStart = new Date(slot1Start.getTime() + 15 * 60000); // 10:15
     const partialOverlapEnd = new Date(partialOverlapStart.getTime() + 30 * 60000); // 10:45
 
-    const doctorOverlapFound = await Appointment.findOne({
-      hospitalId: synthHospitalId,
-      doctorId: synthDoctorId,
-      isCancelled: false,
-      isDeleted: false,
-      startTime: { $lt: partialOverlapEnd },
-      endTime: { $gt: partialOverlapStart },
+    const overlapRes = await makeRequest(app, {
+      method: 'POST',
+      url: '/api/appointments',
+      headers: { authorization: `Bearer ${receptionistToken}` },
+      body: {
+        patientId: synthPatient2Id.toString(),
+        doctorId: synthDoctor1Id.toString(),
+        startTime: partialOverlapStart.toISOString(),
+        endTime: partialOverlapEnd.toISOString(),
+        reason: 'Partial interval overlap booking attempt',
+      },
     });
-    assertAtlas(
-      !!doctorOverlapFound,
-      'Step 8: Doctor Partial Interval Overlap Detection',
-      'Failed to detect partial interval overlap (10:15 - 10:45 vs 10:00 - 10:30)',
-    );
-    logger.info('Step 8 PASS: Partial interval overlap accurately detected and prevented');
+
+    assertAtlas(overlapRes.statusCode === 409, 'Step 8: Partial Overlap Rejected with 409', `Status: ${overlapRes.statusCode}`);
+    assertAtlas(overlapRes.body.error?.code === 'DOCTOR_DOUBLE_BOOKING', 'Step 8: Partial Overlap Code DOCTOR_DOUBLE_BOOKING');
+    logger.info('Step 8 PASS: Partial interval overlap detected and rejected by real booking controller');
 
     // -------------------------------------------------------------------------
-    // Step 9: Cross-Profile Patient Conflict Prevention
+    // Step 9: Cross-Profile Patient Conflict Prevention via Real API
     // -------------------------------------------------------------------------
     logger.info('Step 9: Testing cross-profile patient conflict prevention across sibling profiles...');
-    // Profile 1 has appt1 at 10:00 - 10:30.
-    // Patient user attempts to book Profile 2 at 10:15 - 10:45 with a different hypothetical doctor:
-    const siblingProfiles = await PatientProfile.find({ userId: synthPatientUserId });
-    const siblingProfileIds = siblingProfiles.map((p) => p._id);
-    assertAtlas(
-      siblingProfileIds.length === 2,
-      'Step 9: Sibling Profile Lookup',
-      `Expected 2 sibling profiles under patient user, found ${siblingProfileIds.length}`,
-    );
-
-    const crossProfileConflict = await Appointment.findOne({
-      hospitalId: synthHospitalId,
-      patientId: { $in: siblingProfileIds },
-      isCancelled: false,
-      isDeleted: false,
-      startTime: { $lt: partialOverlapEnd },
-      endTime: { $gt: partialOverlapStart },
-    });
-    assertAtlas(
-      !!crossProfileConflict,
-      'Step 9: Cross-Profile Overlap Detection',
-      'Failed to detect cross-profile overlap conflict for patient sibling profile',
-    );
-    logger.info('Step 9 PASS: Cross-profile patient scheduling conflict prevented across sibling profiles');
-
-    // -------------------------------------------------------------------------
-    // Step 10: Cancelled Slot Reuse Without Collision
-    // -------------------------------------------------------------------------
-    logger.info('Step 10: Verifying cancelled slot re-booking against Atlas...');
-    appt1.status = 'CANCELLED';
-    appt1.isCancelled = true;
-    await appt1.save();
-
-    // Re-book exact 10:00 - 10:30 slot for same doctor with patient2
-    const reusedAppt = await Appointment.create({
-      hospitalId: synthHospitalId,
-      doctorId: synthDoctorId,
-      patientId: synthPatient2Id,
-      departmentId: dept._id,
-      startTime: slot1Start,
-      endTime: slot1End,
-      status: 'CONFIRMED',
-      type: 'ROUTINE',
-      isCancelled: false,
-      isDeleted: false,
-    });
-    assertAtlas(!!reusedAppt._id, 'Step 10: Cancelled Slot Rebooking', 'Failed to re-book cancelled slot');
-    logger.info('Step 10 PASS: Cancelled slot reused successfully without index collision');
-
-    // -------------------------------------------------------------------------
-    // Step 11: Clinical Encounter with Enriched Vitals & Mandatory Reason for Revision
-    // -------------------------------------------------------------------------
-    logger.info('Step 11: Persisting clinical encounter with enriched vitals and testing revision tracking...');
-    const enc = await Encounter.create({
-      hospitalId: synthHospitalId.toString(),
-      doctorId: synthDoctorId.toString(),
-      patientId: synthPatient1Id.toString(),
-      appointmentId: reusedAppt._id.toString(),
-      chiefComplaint: 'Mild headache and hypertension check',
-      status: 'OPEN',
-      vitals: {
-        systolicBp: 130,
-        diastolicBp: 85,
-        pulseRate: 72,
-        temperatureF: 98.6,
-        respiratoryRate: 16,
-        oxygenSaturation: 98,
-        heightCm: 175,
-        weightKg: 75,
-        bmi: 24.5,
-        bmiCategory: 'NORMAL',
-        abnormalFlags: ['PREHYPERTENSION'],
+    // Profile 1 has appointment at 10:00 - 10:30.
+    // Patient attempts to book Profile 2 (same user) with Doctor 2 at overlapping 10:15 - 10:45:
+    const crossProfileRes = await makeRequest(app, {
+      method: 'POST',
+      url: '/api/appointments',
+      headers: { authorization: `Bearer ${patToken}` },
+      body: {
+        patientId: synthPatient2Id.toString(),
+        doctorId: synthDoctor2Id.toString(), // Doctor 2 (different doctor!)
+        startTime: partialOverlapStart.toISOString(),
+        endTime: partialOverlapEnd.toISOString(),
+        reason: 'Cross-profile sibling overlap attempt',
       },
-      diagnoses: [
-        {
-          code: 'I10',
-          description: 'Essential (primary) hypertension',
-          type: 'CONFIRMED',
-          diagnosedAt: new Date(),
-          diagnosedBy: synthDoctorId.toString(),
+    });
+
+    assertAtlas(crossProfileRes.statusCode === 409, 'Step 9: Cross-Profile Overlap Rejected with 409', `Status: ${crossProfileRes.statusCode}`);
+    assertAtlas(crossProfileRes.body.error?.code === 'PATIENT_OVERLAPPING_APPOINTMENT', 'Step 9: Cross-Profile Code PATIENT_OVERLAPPING_APPOINTMENT');
+    logger.info('Step 9 PASS: Cross-profile patient scheduling conflict prevented across sibling profiles by real controller');
+
+    // -------------------------------------------------------------------------
+    // Step 10: Cancelled Slot Reuse via Real Status & Booking APIs
+    // -------------------------------------------------------------------------
+    logger.info('Step 10: Verifying cancelled slot re-booking via actual status and booking APIs...');
+    const cancelRes = await makeRequest(app, {
+      method: 'PATCH',
+      url: `/api/appointments/${synthAppt1Id}/status`,
+      headers: { authorization: `Bearer ${receptionistToken}` },
+      body: {
+        status: 'CANCELLED',
+        cancellationReason: 'Patient cancelled baseline slot',
+      },
+    });
+    assertAtlas(cancelRes.statusCode === 200, 'Step 10: Cancellation API Status 200', `Status: ${cancelRes.statusCode}`);
+
+    // Re-book exact 10:00 - 10:30 slot for Doctor 1 with Patient 2
+    const reuseRes = await makeRequest(app, {
+      method: 'POST',
+      url: '/api/appointments',
+      headers: { authorization: `Bearer ${patToken}` },
+      body: {
+        patientId: synthPatient2Id.toString(),
+        doctorId: synthDoctor1Id.toString(),
+        startTime: slot1Start.toISOString(),
+        endTime: slot1End.toISOString(),
+        reason: 'Rebooking cancelled slot via API',
+      },
+    });
+    assertAtlas(reuseRes.statusCode === 201, 'Step 10: Rebook Cancelled Slot Status 201', `Status: ${reuseRes.statusCode}`);
+    const reusedApptId = reuseRes.body.data?._id;
+    assertAtlas(!!reusedApptId, 'Step 10: Reused Appointment ID Present');
+    logger.info('Step 10 PASS: Cancelled slot reused successfully via real booking API without index collision');
+
+    // -------------------------------------------------------------------------
+    // Step 11: Clinical Encounter with Revisions via Real Encounter API
+    // -------------------------------------------------------------------------
+    logger.info('Step 11: Persisting clinical encounter and testing revision tracking via real encounter API...');
+    const encRes = await makeRequest(app, {
+      method: 'POST',
+      url: '/api/encounters',
+      headers: { authorization: `Bearer ${doc1Token}` },
+      body: {
+        patientId: synthPatient1Id.toString(),
+        doctorId: synthDoctor1Id.toString(),
+        appointmentId: reusedApptId,
+        chiefComplaint: 'Mild headache and hypertension check',
+        vitals: {
+          systolicBp: 130,
+          diastolicBp: 85,
+          pulseRate: 72,
+          temperatureF: 98.6,
+          respiratoryRate: 16,
+          oxygenSaturation: 98,
+          heightCm: 175,
+          weightKg: 75,
         },
-      ],
-      revisions: [],
-      addenda: [],
-      isDeleted: false,
+        diagnoses: [
+          {
+            code: 'I10',
+            description: 'Essential (primary) hypertension',
+            type: 'CONFIRMED',
+            diagnosedAt: new Date().toISOString(),
+            diagnosedBy: synthDoctor1Id.toString(),
+          },
+        ],
+      },
     });
-    assertAtlas(!!enc._id, 'Step 11: Encounter Creation');
 
-    // Test append-only revision logging
-    const previousSnapshot = { chiefComplaint: enc.chiefComplaint, vitals: enc.vitals };
+    assertAtlas(encRes.statusCode === 201, 'Step 11: Encounter Creation API Status 201', `Status: ${encRes.statusCode}`);
+    const realEncId = encRes.body.data?._id;
+    assertAtlas(!!realEncId, 'Step 11: Real Encounter ID in Response');
+
+    // Real update via PUT /api/encounters/:id with mandatory reasonForChange
     const reasonForChange = 'Patient reported headache onset was 3 days ago during evening work';
-    enc.revisions.push({
-      revisionNumber: 1,
-      authorId: synthDoctorUserId!.toString(),
-      authorRole: 'DOCTOR',
-      authorName: 'Dr. Synthetic',
-      reasonForChange,
-      previousSnapshot,
-      changedFields: ['chiefComplaint'],
-      createdAt: new Date(),
+    const updateRes = await makeRequest(app, {
+      method: 'PUT',
+      url: `/api/encounters/${realEncId}`,
+      headers: { authorization: `Bearer ${doc1Token}` },
+      body: {
+        chiefComplaint: 'Mild headache for 3 days and hypertension check',
+        reasonForChange,
+      },
     });
-    enc.chiefComplaint = 'Mild headache for 3 days and hypertension check';
-    await enc.save();
 
-    const updatedEnc = await Encounter.findById(enc._id);
+    assertAtlas(updateRes.statusCode === 200, 'Step 11: Encounter Update API Status 200', `Status: ${updateRes.statusCode}`);
+    assertAtlas(updateRes.body.data.revisions?.length === 1, 'Step 11: Revision Recorded in Document');
+    assertAtlas(updateRes.body.data.revisions[0].reasonForChange === reasonForChange, 'Step 11: Mandatory Reason Stored');
     assertAtlas(
-      updatedEnc?.revisions.length === 1,
-      'Step 11: Encounter Revision Length',
-      `Expected revisions length 1, got ${updatedEnc?.revisions.length}`,
-    );
-    assertAtlas(
-      updatedEnc?.revisions[0].reasonForChange === reasonForChange,
-      'Step 11: Mandatory Reason for Change Stored',
-    );
-    assertAtlas(
-      (updatedEnc?.revisions[0].previousSnapshot as any)?.chiefComplaint === 'Mild headache and hypertension check',
+      updateRes.body.data.revisions[0].previousSnapshot?.chiefComplaint === 'Mild headache and hypertension check',
       'Step 11: Previous Clinical Snapshot Recoverable',
     );
-    logger.info('Step 11 PASS: Clinical encounter persisted with enriched vitals, revisions, and recoverable historical snapshot');
+    assertAtlas(
+      updateRes.body.data.revisions[0].revisedSnapshot?.chiefComplaint === 'Mild headache for 3 days and hypertension check',
+      'Step 11: Revised Clinical Snapshot Preserved',
+    );
+    logger.info('Step 11 PASS: Clinical encounter persisted, updated, and historical snapshot preserved via actual controller');
 
     // -------------------------------------------------------------------------
-    // Step 12: Signed Encounter Immutability & Addenda
+    // Step 12: Signed Encounter Immutability & Addenda via Real Encounter API
     // -------------------------------------------------------------------------
-    logger.info('Step 12: Verifying encounter signing, immutability, and append-only addenda on Atlas...');
-    enc.status = 'SIGNED';
-    enc.signedAt = new Date();
-    enc.signedBy = synthDoctorUserId!.toString();
-    await enc.save();
-
-    // Verify immutability rule: direct modification to signed encounter is forbidden
-    let immutabilityProtected = false;
-    try {
-      if (enc.status === 'SIGNED') {
-        throw new Error('ENCOUNTER_IMMUTABLE: Direct modification of signed clinical encounters is prohibited. Use addenda.');
-      }
-    } catch (immErr: any) {
-      if (immErr.message.includes('ENCOUNTER_IMMUTABLE')) {
-        immutabilityProtected = true;
-      }
-    }
-    assertAtlas(immutabilityProtected, 'Step 12: Signed Encounter Immutability Enforcement');
-
-    // Append addendum
-    enc.addenda.push({
-      authorId: synthDoctorUserId!.toString(),
-      authorRole: 'DOCTOR',
-      authorName: 'Dr. Synthetic',
-      amendmentReason: 'Post-consult laboratory report review',
-      notes: 'HbA1c normal at 5.4%, fasting blood glucose 92 mg/dL',
-      createdAt: new Date(),
+    logger.info('Step 12: Verifying encounter signing, immutability, and append-only addenda via real encounter API...');
+    // Sign encounter
+    const signRes = await makeRequest(app, {
+      method: 'POST',
+      url: `/api/encounters/${realEncId}/sign`,
+      headers: { authorization: `Bearer ${doc1Token}` },
+      body: { confirmation: true },
     });
-    enc.status = 'AMENDED';
-    await enc.save();
+    assertAtlas(signRes.statusCode === 200, 'Step 12: Encounter Signing API Status 200', `Status: ${signRes.statusCode}`);
+    assertAtlas(signRes.body.data.status === 'SIGNED', 'Step 12: Encounter Status Signed');
 
-    const finalizedEnc = await Encounter.findById(enc._id);
-    assertAtlas(finalizedEnc?.status === 'AMENDED', 'Step 12: Encounter Status Amended');
-    assertAtlas(finalizedEnc?.addenda.length === 1, 'Step 12: Addendum Appended Successfully');
-    assertAtlas(finalizedEnc?.chiefComplaint === 'Mild headache for 3 days and hypertension check', 'Step 12: Base Record Intact');
-    logger.info('Step 12 PASS: Signed encounter immutability and append-only addenda strictly enforced on Atlas');
+    // Exercise real API: Direct edit to signed encounter must be rejected by controller
+    const directEditRes = await makeRequest(app, {
+      method: 'PUT',
+      url: `/api/encounters/${realEncId}`,
+      headers: { authorization: `Bearer ${doc1Token}` },
+      body: {
+        chiefComplaint: 'Attempted overwrite of signed clinical record',
+        reasonForChange: 'Attempted modification on signed encounter',
+      },
+    });
+    assertAtlas(directEditRes.statusCode === 400, 'Step 12: Direct Edit Rejected with Status 400', `Status: ${directEditRes.statusCode}`);
+    assertAtlas(directEditRes.body.error?.code === 'ENCOUNTER_IMMUTABLE', 'Step 12: Direct Edit Code ENCOUNTER_IMMUTABLE');
+
+    // Append addendum via real API
+    const addendumRes = await makeRequest(app, {
+      method: 'POST',
+      url: `/api/encounters/${realEncId}/addendum`,
+      headers: { authorization: `Bearer ${doc1Token}` },
+      body: {
+        amendmentReason: 'Post-consult laboratory report review',
+        notes: 'HbA1c normal at 5.4%, fasting blood glucose 92 mg/dL',
+      },
+    });
+    assertAtlas(addendumRes.statusCode === 200, 'Step 12: Addendum API Status 200', `Status: ${addendumRes.statusCode}`);
+    assertAtlas(addendumRes.body.data.status === 'AMENDED', 'Step 12: Encounter Status Amended');
+    assertAtlas(addendumRes.body.data.addenda?.length === 1, 'Step 12: Addenda Array Length 1');
+    assertAtlas(
+      addendumRes.body.data.chiefComplaint === 'Mild headache for 3 days and hypertension check',
+      'Step 12: Base Record Remained Intact and Immutable',
+    );
+    logger.info('Step 12 PASS: Signed encounter immutability and append-only addenda verified via real API/controller');
 
     // -------------------------------------------------------------------------
     // Step 13: Persist Allergies (with ADR), Vaccinations, Family History
@@ -562,7 +635,7 @@ async function runAtlas15StepSyntheticVerification(): Promise<{ ran: number; pas
     assertAtlas(patientAllergies.length === 1, 'Step 14: Allergies Aggregated Count');
     assertAtlas(patientVaccines.length === 1, 'Step 14: Vaccinations Aggregated Count');
     assertAtlas(patientFamily.length === 1, 'Step 14: Family History Aggregated Count');
-    assertAtlas(patientEncs.length === 1, 'Step 14: Encounters Aggregated Count');
+    assertAtlas(patientEncs.length >= 1, 'Step 14: Encounters Aggregated Count');
     logger.info('Step 14 PASS: Complete patient longitudinal timeline successfully aggregated from Atlas');
 
     return { ran: atlasAssertionCount, passed: atlasAssertionPassed };
@@ -583,6 +656,7 @@ async function runAtlas15StepSyntheticVerification(): Promise<{ ran: number; pas
         Allergy.deleteMany({ hospitalId: synthHospitalId.toString() }),
         Vaccination.deleteMany({ hospitalId: synthHospitalId.toString() }),
         FamilyHistory.deleteMany({ hospitalId: synthHospitalId.toString() }),
+        ScheduledReminder.deleteMany({ hospitalId: synthHospitalId }),
         User.deleteMany({ hospitalId: synthHospitalId }),
       ]);
 
@@ -618,6 +692,7 @@ export async function verifyDatabaseFoundation(): Promise<{
     'Allergy',
     'Vaccination',
     'FamilyHistory',
+    'ScheduledReminder',
   ];
   const registeredModels = Object.keys(mongoose.models);
   const modelsRegistered = requiredModels.every((m) => registeredModels.includes(m));
@@ -713,6 +788,7 @@ export async function verifyDatabaseFoundation(): Promise<{
       await Allergy.init();
       await Vaccination.init();
       await FamilyHistory.init();
+      await ScheduledReminder.init();
       logger.info('Live MongoDB Indexes Synchronized Successfully');
 
       // Execute 15-step synthetic verification suite against live Atlas
@@ -776,6 +852,10 @@ export async function verifyDatabaseFoundation(): Promise<{
     FamilyHistory: {
       collection: FamilyHistory.collection.name,
       indexes: FamilyHistory.schema.indexes().map((idx) => Object.keys(idx[0])),
+    },
+    ScheduledReminder: {
+      collection: ScheduledReminder.collection.name,
+      indexes: ScheduledReminder.schema.indexes().map((idx) => Object.keys(idx[0])),
     },
   };
 

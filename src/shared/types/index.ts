@@ -229,6 +229,7 @@ export interface IClinicalRevision {
   authorName?: string;
   reasonForChange: string;
   previousSnapshot: Record<string, any>;
+  revisedSnapshot?: Record<string, any>;
   changedFields: string[];
   createdAt: string | Date;
 }

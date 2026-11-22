@@ -260,16 +260,43 @@ describe('Day 11: EMR Encounters, Vitals & Immutability Integration Tests', () =
         },
       });
 
-      expect(mockEncounter.revisions).toHaveLength(2);
+      // Third revision to strictly prove old entries remain untouched
+      await makeRequest(app, {
+        method: 'PUT',
+        url: `/api/encounters/${encounterId}`,
+        headers: { authorization: `Bearer ${doctorToken}` },
+        body: {
+          chiefComplaint: 'Third revision text',
+          reasonForChange: 'Final pre-sign clinical adjustment',
+        },
+      });
+
+      expect(mockEncounter.revisions).toHaveLength(3);
+      // Verify first historical entry remains completely unchanged
+      expect(mockEncounter.revisions[0].revisionNumber).toBe(1);
       expect(mockEncounter.revisions[0].previousSnapshot.chiefComplaint).toBe(
         'Original entry baseline',
       );
+      expect(mockEncounter.revisions[0].revisedSnapshot.chiefComplaint).toBe('First revision text');
       expect(mockEncounter.revisions[0].reasonForChange).toBe('Lab results reviewed');
+
+      // Verify second historical entry remains completely unchanged
+      expect(mockEncounter.revisions[1].revisionNumber).toBe(2);
       expect(mockEncounter.revisions[1].previousSnapshot.chiefComplaint).toBe(
         'First revision text',
       );
+      expect(mockEncounter.revisions[1].revisedSnapshot.chiefComplaint).toBe('Second revision text');
       expect(mockEncounter.revisions[1].reasonForChange).toBe('Attending physician follow-up note');
-      expect(mockEncounter.chiefComplaint).toBe('Second revision text');
+
+      // Verify third entry
+      expect(mockEncounter.revisions[2].revisionNumber).toBe(3);
+      expect(mockEncounter.revisions[2].previousSnapshot.chiefComplaint).toBe(
+        'Second revision text',
+      );
+      expect(mockEncounter.revisions[2].revisedSnapshot.chiefComplaint).toBe('Third revision text');
+      expect(mockEncounter.revisions[2].reasonForChange).toBe('Final pre-sign clinical adjustment');
+
+      expect(mockEncounter.chiefComplaint).toBe('Third revision text');
     });
 
     it('CRITICAL APPEND-ONLY AUDIT: should reject clinical correction without mandatory reasonForChange', async () => {
@@ -419,6 +446,7 @@ describe('Day 11: EMR Encounters, Vitals & Immutability Integration Tests', () =
         _id: encounterId,
         hospitalId: hospitalAId,
         status: 'SIGNED',
+        chiefComplaint: 'Signed clinical baseline diagnosis and unchanged notes',
         addenda: [],
         save: vi.fn().mockResolvedValue(true),
       };
@@ -441,6 +469,9 @@ describe('Day 11: EMR Encounters, Vitals & Immutability Integration Tests', () =
       expect(mockSignedEncounter.status).toBe('AMENDED');
       expect(mockSignedEncounter.addenda).toHaveLength(1);
       expect(mockSignedEncounter.addenda[0].amendmentReason).toBe('Lab follow-up results');
+      expect(mockSignedEncounter.chiefComplaint).toBe(
+        'Signed clinical baseline diagnosis and unchanged notes',
+      );
       expect(mockSignedEncounter.save).toHaveBeenCalled();
     });
 

@@ -456,8 +456,11 @@ export async function createAppointment(
     });
 
     // Schedule actual 24-hour and 1-hour pre-appointment reminders
-    reminderScheduler.scheduleAppointmentReminders({
+    await reminderScheduler.scheduleAppointmentReminders({
+      hospitalId: (userHospitalId || validated.hospitalId || appointment?.hospitalId)?.toString(),
       appointmentId: (appointment?._id || 'new-appt').toString(),
+      patientId: validated.patientId,
+      doctorId: validated.doctorId,
       appointmentTime: new Date(apptStartTime),
       recipientEmail: patient.email,
       recipientPhone: patient.phone,
@@ -767,7 +770,7 @@ export async function updateAppointmentStatus(
     appointment.status = status;
     if (status === 'CANCELLED') {
       appointment.isCancelled = true;
-      reminderScheduler.cancelAppointmentReminders(
+      await reminderScheduler.cancelAppointmentReminders(
         appointment._id.toString(),
         cancellationReason || reason || 'Appointment cancelled',
       );
