@@ -454,3 +454,36 @@ export async function amendPrescription(id: string, data: any): Promise<any> {
   }
   return result.data;
 }
+
+export async function signPrescription(id: string, signatureData?: string): Promise<any> {
+  const response = await fetch(`/api/prescriptions/${id}/sign`, {
+    method: 'POST',
+    headers: { ...getAuthHeader(), 'Content-Type': 'application/json' },
+    body: JSON.stringify({ signatureData }),
+  });
+  const result: ApiResponse<any> = await response.json();
+  if (!result.success || !result.data) {
+    throw new Error(result.error?.message || 'Failed to sign prescription');
+  }
+  return result.data;
+}
+
+export async function uploadDoctorSignature(
+  doctorId: string,
+  data: { signatureData: string; mimeType: string },
+): Promise<any> {
+  const response = await fetch(`/api/doctors/${doctorId}/signature`, {
+    method: 'POST',
+    headers: { ...getAuthHeader(), 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  });
+  const result: ApiResponse<any> = await response.json();
+  if (!result.success || !result.data) {
+    throw new Error(result.error?.message || 'Failed to upload doctor signature');
+  }
+  return result.data;
+}
+
+export function getPrescriptionPdfUrl(id: string): string {
+  return `/api/prescriptions/${id}/pdf`;
+}

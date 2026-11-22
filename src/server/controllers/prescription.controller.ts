@@ -3,10 +3,17 @@ import { Prescription } from '../models/Prescription.js';
 import { PatientProfile } from '../models/PatientProfile.js';
 import { DoctorProfile } from '../models/DoctorProfile.js';
 import { Encounter } from '../models/Encounter.js';
-import { prescriptionCreateSchema, prescriptionAmendSchema } from '../../shared/schemas/index.js';
+import { Hospital } from '../models/Hospital.js';
+import { User } from '../models/User.js';
+import {
+  prescriptionCreateSchema,
+  prescriptionAmendSchema,
+  prescriptionSignSchema,
+} from '../../shared/schemas/index.js';
 import { recordAuditEvent } from '../utils/auditLogger.js';
 import { logger } from '../utils/logger.js';
 import { ROLES, UserRole } from '../../shared/constants/roles.js';
+import { pdfGeneratorService } from '../services/pdfGenerator.service.js';
 
 export class PrescriptionController {
   /**
@@ -518,6 +525,291 @@ export class PrescriptionController {
         error: {
           code: 'INTERNAL_SERVER_ERROR',
           message: 'Failed to amend prescription',
+        },
+        timestamp: new Date().toISOString(),
+      });
+    }
+  }
+
+  /**
+   * Electronically sign an issued prescription using doctor's digital signature.
+   * Once signed, direct editing is locked and any modification must use the amendment trail.
+   */
+  async signPrescription(req: Request, res: Response): Promise<void> {
+    try {
+      const id = req.params.id as string;
+      const prescription = await Prescription.findOne({ _id: id, isDeleted: false });
+
+      if (!prescription) {
+        res.status(404).json({
+          success: false,
+          error: {
+            code: 'NOT_FOUND',
+            message: 'Prescription not found',
+          },
+          timestamp: new Date().toISOString(),
+        });
+        return;
+      }
+
+      // Tenant isolation validation
+      if (
+        req.user?.role !== ROLES.SUPER_ADMIN &&
+        req.user?.hospitalId &&
+        prescription.hospitalId !== req.user.hospitalId
+      ) {
+        res.status(403).json({
+          success: false,
+          error: {
+            code: 'CROSS_TENANT_ACCESS_DENIED',
+            message: 'Cannot sign prescription from another hospital tenant',
+          },
+          timestamp: new Date().toISOString(),
+        });
+        return;
+      }
+
+      // Check status
+      if (prescription.status === 'CANCELLED') {
+        res.status(400).json({
+          success: false,
+          error: {
+            code: 'PRESCRIPTION_CANCELLED',
+            message: 'Cannot sign a cancelled prescription',
+          },
+          timestamp: new Date().toISOString(),
+        });
+        return;
+      }
+
+      if (prescription.signedAt) {
+        res.status(400).json({
+          success: false,
+          error: {
+            code: 'ALREADY_SIGNED',
+            message: 'This prescription has already been digitally signed and sealed',
+          },
+          timestamp: new Date().toISOString(),
+        });
+        return;
+      }
+
+      // Validate signature
+      const validatedBody = prescriptionSignSchema.parse(req.body || {});
+      let signatureData = validatedBody.signatureData;
+
+      let doctorProfile: any = null;
+      if (req.user?.role === ROLES.DOCTOR) {
+        doctorProfile = await DoctorProfile.findOne({
+          userId: req.user.userId,
+          hospitalId: prescription.hospitalId,
+          isDeleted: false,
+        });
+
+        if (!doctorProfile || doctorProfile._id.toString() !== prescription.doctorId.toString()) {
+          res.status(403).json({
+            success: false,
+            error: {
+              code: 'FORBIDDEN',
+              message: 'Only the prescribing physician may electronically sign this prescription',
+            },
+            timestamp: new Date().toISOString(),
+          });
+          return;
+        }
+
+        if (!signatureData && doctorProfile.signatureData) {
+          signatureData = doctorProfile.signatureData;
+        }
+      }
+
+      if (!signatureData) {
+        res.status(400).json({
+          success: false,
+          error: {
+            code: 'SIGNATURE_REQUIRED',
+            message: 'A registered digital signature is required to sign this prescription',
+          },
+          timestamp: new Date().toISOString(),
+        });
+        return;
+      }
+
+      const signedAt = new Date();
+      const signedBy = doctorProfile ? doctorProfile._id.toString() : req.user?.userId || 'system';
+
+      prescription.digitalSignature = signatureData;
+      prescription.signedAt = signedAt;
+      prescription.signedBy = signedBy;
+      await prescription.save();
+
+      // Record regulatory audit trail
+      await recordAuditEvent({
+        hospitalId: prescription.hospitalId,
+        userId: req.user?.userId || 'unknown',
+        userRole: req.user?.role || 'UNKNOWN',
+        action: 'PRESCRIPTION_SIGN',
+        entityType: 'Prescription',
+        entityId: prescription._id.toString(),
+        details: {
+          signedAt,
+          signedBy,
+        },
+      });
+
+      logger.info('Prescription digitally signed and sealed', {
+        prescriptionId: prescription._id,
+        doctorId: prescription.doctorId,
+        signedAt,
+      });
+
+      res.status(200).json({
+        success: true,
+        data: prescription,
+        timestamp: new Date().toISOString(),
+      });
+    } catch (err: any) {
+      logger.error('Failed to sign prescription', { error: err.message });
+      res.status(500).json({
+        success: false,
+        error: {
+          code: 'INTERNAL_SERVER_ERROR',
+          message: 'Failed to sign prescription',
+        },
+        timestamp: new Date().toISOString(),
+      });
+    }
+  }
+
+  /**
+   * Generate official PDF document for a prescription with hospital letterhead,
+   * complete medication list, and tamper-evident digital signature.
+   */
+  async generatePrescriptionPdf(req: Request, res: Response): Promise<void> {
+    try {
+      const id = req.params.id as string;
+      const prescription = await Prescription.findOne({ _id: id, isDeleted: false });
+
+      if (!prescription) {
+        res.status(404).json({
+          success: false,
+          error: {
+            code: 'NOT_FOUND',
+            message: 'Prescription not found',
+          },
+          timestamp: new Date().toISOString(),
+        });
+        return;
+      }
+
+      // Tenant isolation validation
+      if (
+        req.user?.role !== ROLES.SUPER_ADMIN &&
+        req.user?.hospitalId &&
+        prescription.hospitalId !== req.user.hospitalId
+      ) {
+        res.status(403).json({
+          success: false,
+          error: {
+            code: 'CROSS_TENANT_ACCESS_DENIED',
+            message: 'Cannot access prescription from another hospital tenant',
+          },
+          timestamp: new Date().toISOString(),
+        });
+        return;
+      }
+
+      // Patient privacy check - patient can only download their own prescription PDF
+      if (req.user?.role === ROLES.PATIENT) {
+        const patientProfile = await PatientProfile.findOne({
+          userId: req.user.userId,
+          isDeleted: false,
+        });
+
+        if (
+          !patientProfile ||
+          patientProfile._id.toString() !== prescription.patientId.toString()
+        ) {
+          res.status(403).json({
+            success: false,
+            error: {
+              code: 'FORBIDDEN',
+              message: 'Patients may only access their own prescription documents',
+            },
+            timestamp: new Date().toISOString(),
+          });
+          return;
+        }
+      }
+
+      // Fetch related records for comprehensive PDF document
+      const hospital = await Hospital.findById(prescription.hospitalId);
+      const patientProfile = await PatientProfile.findById(prescription.patientId);
+      const doctorProfile = await DoctorProfile.findById(prescription.doctorId);
+
+      const patientUser = patientProfile ? await User.findById(patientProfile.userId) : null;
+      const doctorUser = doctorProfile ? await User.findById(doctorProfile.userId) : null;
+
+      const doctorName = doctorUser
+        ? `${doctorUser.firstName} ${doctorUser.lastName}`.trim()
+        : 'Attending Physician';
+
+      const patientName = patientUser
+        ? `${patientUser.firstName} ${patientUser.lastName}`.trim()
+        : patientProfile?.mrn || 'Patient Record';
+
+      const pdfBuffer = pdfGeneratorService.generatePrescriptionPdf({
+        hospital: {
+          name: hospital?.name || 'MedCore General Hospital',
+          code: hospital?.code,
+          licenseNumber: hospital?.licenseNumber,
+          phone: hospital?.phone,
+          email: hospital?.email,
+          address: hospital?.address,
+        },
+        doctor: {
+          name: doctorName,
+          licenseNumber: doctorProfile?.licenseNumber || 'LIC-VERIFIED',
+          specialization: doctorProfile?.specialization || 'General Medicine',
+          qualifications: doctorProfile?.qualifications,
+          signatureData: doctorProfile?.signatureData,
+          signatureMimeType: doctorProfile?.signatureMimeType,
+        },
+        patient: {
+          id: patientProfile?.mrn || patientProfile?._id?.toString() || prescription.patientId,
+          name: patientName,
+          gender: patientProfile?.gender,
+          dateOfBirth: patientProfile?.dateOfBirth,
+          bloodGroup: patientProfile?.bloodGroup,
+          phone: patientUser?.phone,
+        },
+        prescription: {
+          _id: prescription._id.toString(),
+          issuedAt: prescription.issuedAt || (prescription as any).createdAt || new Date(),
+          status: prescription.status,
+          diagnosis: prescription.diagnosis,
+          items: prescription.items || [],
+          notes: prescription.notes,
+          digitalSignature: prescription.digitalSignature,
+          signedAt: prescription.signedAt,
+          signedBy: prescription.signedBy,
+        },
+      });
+
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader(
+        'Content-Disposition',
+        `inline; filename="prescription-${prescription._id}.pdf"`,
+      );
+      res.setHeader('Content-Length', pdfBuffer.length);
+      res.send(pdfBuffer);
+    } catch (err: any) {
+      logger.error('Failed to generate prescription PDF', { error: err.message });
+      res.status(500).json({
+        success: false,
+        error: {
+          code: 'INTERNAL_SERVER_ERROR',
+          message: 'Failed to generate prescription PDF',
         },
         timestamp: new Date().toISOString(),
       });

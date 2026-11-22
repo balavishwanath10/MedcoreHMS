@@ -5,6 +5,8 @@ import {
   getDoctorProfileById,
   updateDoctorProfile,
   deleteDoctorProfile,
+  uploadDoctorSignature,
+  uploadMySignature,
 } from '../controllers/doctor.controller.js';
 import { authenticateToken } from '../middleware/auth.middleware.js';
 import { requireRole } from '../middleware/rbac.middleware.js';
@@ -12,6 +14,14 @@ import { requireRole } from '../middleware/rbac.middleware.js';
 export const doctorRouter = Router();
 
 doctorRouter.use(authenticateToken);
+
+// Doctor signature upload (Doctor self or Admin)
+doctorRouter.post('/signature', requireRole('DOCTOR'), uploadMySignature);
+doctorRouter.post(
+  '/:id/signature',
+  requireRole('SUPER_ADMIN', 'HOSPITAL_ADMIN', 'DOCTOR'),
+  uploadDoctorSignature,
+);
 
 // Create doctor profile (Super Admin or Hospital Admin)
 doctorRouter.post('/', requireRole('SUPER_ADMIN', 'HOSPITAL_ADMIN'), createDoctorProfile);

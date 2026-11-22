@@ -114,6 +114,11 @@ const PrescriptionSchema = new Schema<PrescriptionDocument>(
       required: [true, 'Encounter ID is required'],
       index: true,
     },
+    diagnosis: {
+      type: String,
+      trim: true,
+      maxlength: 500,
+    },
     items: {
       type: [PrescriptionItemSchema],
       validate: {
@@ -134,6 +139,18 @@ const PrescriptionSchema = new Schema<PrescriptionDocument>(
       index: true,
     },
     signatureUrl: {
+      type: String,
+      trim: true,
+    },
+    digitalSignature: {
+      type: String,
+      trim: true,
+    },
+    signedAt: {
+      type: Date,
+      index: true,
+    },
+    signedBy: {
       type: String,
       trim: true,
     },

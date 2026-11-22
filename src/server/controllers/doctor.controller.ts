@@ -6,6 +6,7 @@ import { Department } from '../models/Department.js';
 import {
   doctorProfileCreateSchema,
   doctorProfileUpdateSchema,
+  signatureUploadSchema,
 } from '../../shared/schemas/index.js';
 import { logger } from '../utils/logger.js';
 
@@ -437,6 +438,143 @@ export async function deleteDoctorProfile(
       data: { message: 'Doctor profile successfully deleted.' },
       timestamp: new Date().toISOString(),
     });
+  } catch (error) {
+    next(error);
+  }
+}
+
+/**
+ * Upload digital signature (PNG or SVG) for a doctor profile.
+ * Doctors may only upload their own signature; admins can upload for doctors in their hospital.
+ */
+export async function uploadDoctorSignature(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+): Promise<void> {
+  try {
+    const doctorId = req.params.id || req.body.doctorId;
+    if (!doctorId || !mongoose.Types.ObjectId.isValid(doctorId)) {
+      res.status(400).json({
+        success: false,
+        error: {
+          code: 'INVALID_DOCTOR_ID',
+          message: 'Valid doctor ID is required to upload signature.',
+        },
+        timestamp: new Date().toISOString(),
+      });
+      return;
+    }
+
+    // Validate payload first
+    const validated = signatureUploadSchema.parse(req.body);
+
+    // Size limit check (max 500KB = 512,000 bytes)
+    const rawData = validated.signatureData.replace(/^data:[^;]+;base64,/, '');
+    const byteLength = Buffer.byteLength(rawData, 'base64');
+    if (byteLength > 512 * 1024) {
+      res.status(400).json({
+        success: false,
+        error: {
+          code: 'FILE_TOO_LARGE',
+          message: 'Signature image exceeds maximum allowed size of 500KB.',
+        },
+        timestamp: new Date().toISOString(),
+      });
+      return;
+    }
+
+    const doctor = await DoctorProfile.findOne({ _id: doctorId, isDeleted: false });
+    if (!doctor) {
+      res.status(404).json({
+        success: false,
+        error: {
+          code: 'DOCTOR_NOT_FOUND',
+          message: 'Doctor profile not found.',
+        },
+        timestamp: new Date().toISOString(),
+      });
+      return;
+    }
+
+    const userRole = req.user?.role;
+    const userHospitalId = req.user?.hospitalId;
+
+    // Cross-tenant check
+    if (userRole !== 'SUPER_ADMIN' && doctor.hospitalId.toString() !== userHospitalId) {
+      res.status(403).json({
+        success: false,
+        error: {
+          code: 'CROSS_TENANT_ACCESS_DENIED',
+          message: 'Cannot manage signature for doctor in another hospital.',
+        },
+        timestamp: new Date().toISOString(),
+      });
+      return;
+    }
+
+    // Role ownership check: DOCTOR can only upload for themselves
+    if (userRole === 'DOCTOR' && doctor.userId.toString() !== req.user?.userId) {
+      res.status(403).json({
+        success: false,
+        error: {
+          code: 'FORBIDDEN',
+          message: 'Physicians may only upload their own digital signature.',
+        },
+        timestamp: new Date().toISOString(),
+      });
+      return;
+    }
+
+    doctor.signatureData = validated.signatureData;
+    doctor.signatureMimeType = validated.mimeType;
+    doctor.signatureUploadedAt = new Date();
+    await doctor.save();
+
+    logger.info('Doctor digital signature uploaded successfully', {
+      doctorId: doctor._id,
+      userId: req.user?.userId,
+      mimeType: validated.mimeType,
+      sizeBytes: byteLength,
+    });
+
+    res.status(200).json({
+      success: true,
+      data: {
+        doctorId: doctor._id,
+        signatureUploadedAt: doctor.signatureUploadedAt,
+        mimeType: doctor.signatureMimeType,
+      },
+      timestamp: new Date().toISOString(),
+    });
+  } catch (error) {
+    next(error);
+  }
+}
+
+/**
+ * Convenience endpoint for logged-in doctor to upload their signature directly.
+ */
+export async function uploadMySignature(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+): Promise<void> {
+  try {
+    const doctor = await DoctorProfile.findOne({ userId: req.user?.userId, isDeleted: false });
+    if (!doctor) {
+      res.status(404).json({
+        success: false,
+        error: {
+          code: 'DOCTOR_NOT_FOUND',
+          message: 'No doctor profile found for current user.',
+        },
+        timestamp: new Date().toISOString(),
+      });
+      return;
+    }
+    req.params.id = doctor._id.toString();
+    return uploadDoctorSignature(req, res, next);
   } catch (error) {
     next(error);
   }

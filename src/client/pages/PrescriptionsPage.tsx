@@ -11,12 +11,17 @@ import {
   User,
   History,
   Pill,
+  Download,
+  PenTool,
+  FileCheck,
 } from 'lucide-react';
 import {
   searchMedicines,
   fetchPrescriptions,
   createPrescription,
   amendPrescription,
+  signPrescription,
+  getPrescriptionPdfUrl,
   fetchEncounters,
   fetchDoctors,
 } from '../services/api';
@@ -233,6 +238,25 @@ export const PrescriptionsPage: React.FC = () => {
     }
   };
 
+  const handleSignPrescription = async (id: string) => {
+    try {
+      setLoading(true);
+      setError(null);
+      await signPrescription(id);
+      setSuccess('Prescription digitally signed and sealed successfully.');
+      await loadInitialData();
+    } catch (err: any) {
+      setError(err.message || 'Failed to sign prescription');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleDownloadPdf = (id: string) => {
+    const url = getPrescriptionPdfUrl(id);
+    window.open(url, '_blank');
+  };
+
   return (
     <div className="space-y-6">
       {/* Header */}
@@ -350,6 +374,30 @@ export const PrescriptionsPage: React.FC = () => {
                       >
                         {p.status}
                       </span>
+
+                      {p.signedAt ? (
+                        <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200">
+                          <FileCheck className="h-3 w-3" />
+                          Signed
+                        </span>
+                      ) : (
+                        <button
+                          onClick={() => handleSignPrescription(p._id)}
+                          className="px-2.5 py-1 text-[11px] font-semibold text-indigo-700 bg-indigo-50 hover:bg-indigo-100 rounded border border-indigo-200 transition-colors flex items-center gap-1"
+                        >
+                          <PenTool className="h-3 w-3" />
+                          Sign
+                        </button>
+                      )}
+
+                      <button
+                        onClick={() => handleDownloadPdf(p._id)}
+                        className="px-2.5 py-1 text-[11px] font-semibold text-slate-700 bg-white hover:bg-slate-50 rounded border border-slate-200 transition-colors flex items-center gap-1"
+                      >
+                        <Download className="h-3 w-3 text-teal-600" />
+                        PDF
+                      </button>
+
                       <button
                         onClick={() => openAmendmentModal(p)}
                         className="px-2.5 py-1 text-[11px] font-semibold text-teal-700 bg-teal-50 hover:bg-teal-100 rounded border border-teal-200 transition-colors flex items-center gap-1"

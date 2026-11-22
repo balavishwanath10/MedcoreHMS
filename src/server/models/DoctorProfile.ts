@@ -61,6 +61,19 @@ const doctorProfileSchema = new Schema<DoctorProfileDocument>(
       trim: true,
       maxlength: [1000, 'Bio cannot exceed 1000 characters'],
     },
+    signatureData: {
+      type: String,
+      required: false,
+    },
+    signatureMimeType: {
+      type: String,
+      enum: ['image/png', 'image/svg+xml'],
+      required: false,
+    },
+    signatureUploadedAt: {
+      type: Date,
+      required: false,
+    },
     bookingLockVersion: {
       type: Number,
       default: 0,

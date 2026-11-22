@@ -508,3 +508,19 @@ export const prescriptionAmendSchema = z.object({
     .min(3, 'Amendment reason must be at least 3 characters')
     .max(500),
 });
+
+export const signatureUploadSchema = z.object({
+  signatureData: z
+    .string({ required_error: 'Signature data is required' })
+    .min(10, 'Signature data must be at least 10 characters')
+    .max(1024 * 1024, 'Signature image exceeds maximum allowed size of 1MB'),
+  mimeType: z.enum(['image/png', 'image/svg+xml'], {
+    errorMap: () => ({
+      message: 'Signature must be a valid PNG (image/png) or SVG (image/svg+xml) file',
+    }),
+  }),
+});
+
+export const prescriptionSignSchema = z.object({
+  signatureData: z.string().optional(),
+});

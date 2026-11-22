@@ -84,6 +84,9 @@ export interface IDoctorProfile {
   experienceYears: number;
   consultationFee: number;
   bio?: string;
+  signatureData?: string;
+  signatureMimeType?: 'image/png' | 'image/svg+xml';
+  signatureUploadedAt?: string | Date;
   bookingLockVersion?: number;
   isActive: boolean;
   isDeleted: boolean;
@@ -336,10 +339,14 @@ export interface IPrescription {
   patientId: string;
   doctorId: string;
   encounterId: string;
+  diagnosis?: string;
   items: IPrescriptionItem[];
   notes?: string;
   status: PrescriptionStatus;
   signatureUrl?: string; // Digital signature asset URL
+  digitalSignature?: string;
+  signedAt?: string | Date;
+  signedBy?: string;
   amendments?: IPrescriptionAmendment[];
   issuedAt: string | Date;
   isDeleted: boolean;

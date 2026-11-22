@@ -24,6 +24,18 @@ prescriptionRouter.get('/', (req, res) => prescriptionController.getPrescription
 // Get single prescription by ID with tenant isolation & patient privacy
 prescriptionRouter.get('/:id', (req, res) => prescriptionController.getPrescriptionById(req, res));
 
+// Generate official prescription PDF with letterhead & digital signature
+prescriptionRouter.get('/:id/pdf', (req, res) =>
+  prescriptionController.generatePrescriptionPdf(req, res),
+);
+
+// Electronically sign prescription (Attending Doctor, Hospital Admin, Super Admin)
+prescriptionRouter.post(
+  '/:id/sign',
+  requireRole(ROLES.DOCTOR, ROLES.HOSPITAL_ADMIN, ROLES.SUPER_ADMIN),
+  (req, res) => prescriptionController.signPrescription(req, res),
+);
+
 // Amend prescription (Attending Doctor, Hospital Admin, Super Admin)
 prescriptionRouter.post(
   '/:id/amend',
